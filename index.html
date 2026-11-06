@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Media Downloader Unleashed!! — Chrome MV3</title>
+  <meta name="description" content="A powerful Chrome extension to detect and download videos, audio, HLS streams, and subtitles from any website.">
+  <style>
+    :root {
+      --brand: #6c63ff;
+      --brand2: #ff6584;
+      --brand3: #43e97b;
+      --dark: #0d0d1a;
+      --dark2: #13132b;
+      --dark3: #1a1a3a;
+      --card: #1e1e3f;
+      --card2: #252550;
+      --text: #f0f0ff;
+      --muted: #9898bb;
+      --border: rgba(108,99,255,0.25);
+      --glow: rgba(108,99,255,0.5);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--dark);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ===== ANIMATED BACKGROUND ===== */
+    .bg-stars {
+      position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+    }
+    .bg-stars::before {
+      content: '';
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 20%, rgba(108,99,255,0.15) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 80%, rgba(255,101,132,0.1) 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 50%, rgba(67,233,123,0.05) 0%, transparent 70%);
+      animation: bgPulse 8s ease-in-out infinite alternate;
+    }
+    @keyframes bgPulse {
+      0% { opacity: 0.5; transform: scale(1); }
+      100% { opacity: 1; transform: scale(1.05); }
+    }
+
+    /* Floating particles */
+    .particle {
+      position: fixed;
+      border-radius: 50%;
+      animation: float linear infinite;
+      pointer-events: none;
+      z-index: 0;
+    }
+    @keyframes float {
+      0% { transform: translateY(100vh) rotate(0deg); opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { transform: translateY(-100px) rotate(720deg); opacity: 0; }
+    }
+
+    /* ===== NAVBAR ===== */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1rem 2rem;
+      background: rgba(13,13,26,0.8);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      transition: all 0.3s;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 0.6rem;
+      font-size: 1.1rem; font-weight: 700; color: var(--text);
+      text-decoration: none;
+    }
+    .nav-logo-icon {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+    .nav-links { display: flex; gap: 2rem; list-style: none; }
+    .nav-links a {
+      color: var(--muted); text-decoration: none; font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-cta {
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+      color: white; padding: 0.5rem 1.2rem; border-radius: 8px;
+      text-decoration: none; font-size: 0.85rem; font-weight: 600;
+      transition: transform 0.2s, box-shadow 0.2s;
+      box-shadow: 0 4px 15px var(--glow);
+    }
+    .nav-cta:hover { transform: translateY(-2px); box-shadow: 0 8px 25px var(--glow); }
+
+    /* ===== HERO ===== */
+    .hero {
+      position: relative; z-index: 1;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; padding: 8rem 2rem 4rem;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: rgba(108,99,255,0.15); border: 1px solid var(--border);
+      padding: 0.4rem 1rem; border-radius: 100px;
+      font-size: 0.8rem; color: var(--brand);
+      margin-bottom: 1.5rem;
+      animation: fadeUp 0.6s ease both;
+    }
+    .hero-badge span { width: 6px; height: 6px; background: var(--brand3); border-radius: 50%; animation: blink 1.5s infinite; }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 800; line-height: 1.1;
+      margin-bottom: 1.5rem;
+      animation: fadeUp 0.6s 0.1s ease both;
+    }
+    .gradient-text {
+      background: linear-gradient(135deg, var(--brand) 0%, var(--brand2) 50%, var(--brand3) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 1.15rem; color: var(--muted); max-width: 600px;
+      margin-bottom: 2.5rem;
+      animation: fadeUp 0.6s 0.2s ease both;
+    }
+    .hero-buttons {
+      display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center;
+      animation: fadeUp 0.6s 0.3s ease both;
+    }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+      color: white; padding: 0.85rem 2rem; border-radius: 12px;
+      text-decoration: none; font-weight: 700; font-size: 1rem;
+      box-shadow: 0 8px 30px var(--glow);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .btn-primary:hover { transform: translateY(-3px); box-shadow: 0 12px 40px var(--glow); }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+      color: var(--text); padding: 0.85rem 2rem; border-radius: 12px;
+      text-decoration: none; font-weight: 600; font-size: 1rem;
+      transition: background 0.2s, transform 0.2s;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.1); transform: translateY(-3px); }
+
+    /* Browser badges */
+    .browser-compat {
+      display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;
+      margin-top: 3rem;
+      animation: fadeUp 0.6s 0.4s ease both;
+    }
+    .browser-badge {
+      display: flex; align-items: center; gap: 0.4rem;
+      background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+      padding: 0.4rem 0.9rem; border-radius: 8px; font-size: 0.8rem; color: var(--muted);
+    }
+    .browser-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand3); }
+
+    /* Scroll indicator */
+    .scroll-hint {
+      position: absolute; bottom: 2rem; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
+      color: var(--muted); font-size: 0.75rem; animation: fadeUp 1s 1s ease both;
+    }
+    .scroll-arrow {
+      width: 20px; height: 20px; border-right: 2px solid var(--muted);
+      border-bottom: 2px solid var(--muted); transform: rotate(45deg);
+      animation: scrollBounce 1.5s infinite;
+    }
+    @keyframes scrollBounce { 0%,100%{transform:rotate(45deg) translateY(0)} 50%{transform:rotate(45deg) translateY(5px)} }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ===== SECTIONS ===== */
+    section { position: relative; z-index: 1; padding: 5rem 2rem; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    .section-label {
+      display: inline-block; color: var(--brand); font-size: 0.8rem;
+      font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+      margin-bottom: 0.75rem;
+    }
+    .section-title {
+      font-size: clamp(1.8rem, 4vw, 2.8rem); font-weight: 800;
+      margin-bottom: 1rem; line-height: 1.2;
+    }
+    .section-desc { color: var(--muted); font-size: 1rem; max-width: 580px; margin-bottom: 3rem; }
+
+    /* ===== FEATURES GRID ===== */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+    }
+    .feature-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 1.75rem;
+      transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
+      cursor: default;
+    }
+    .feature-card:hover {
+      transform: translateY(-6px);
+      border-color: rgba(108,99,255,0.5);
+      box-shadow: 0 12px 40px rgba(108,99,255,0.15);
+    }
+    .feature-icon {
+      width: 52px; height: 52px; border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.5rem; margin-bottom: 1rem;
+    }
+    .feature-card h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .feature-card p { font-size: 0.88rem; color: var(--muted); line-height: 1.6; }
+
+    /* ===== INSTALL STEPS ===== */
+    .install-section { background: var(--dark2); }
+    .steps-wrapper { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: center; }
+    @media (max-width: 768px) { .steps-wrapper { grid-template-columns: 1fr; } }
+
+    .steps-list { display: flex; flex-direction: column; gap: 1.25rem; }
+    .step {
+      display: flex; gap: 1rem; align-items: flex-start;
+      padding: 1.25rem; border-radius: 14px;
+      background: var(--card); border: 1px solid var(--border);
+      cursor: pointer; transition: border-color 0.3s, transform 0.2s;
+    }
+    .step.active { border-color: var(--brand); transform: translateX(6px); }
+    .step-num {
+      width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 0.85rem; color: white;
+    }
+    .step-content h4 { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.3rem; }
+    .step-content p { font-size: 0.83rem; color: var(--muted); }
+
+    /* Demo panel */
+    .demo-panel {
+      background: var(--card2); border: 1px solid var(--border);
+      border-radius: 20px; overflow: hidden;
+    }
+    .demo-bar {
+      background: rgba(0,0,0,0.3); padding: 0.75rem 1rem;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .demo-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .demo-url {
+      flex: 1; background: rgba(255,255,255,0.08); border-radius: 6px;
+      padding: 0.3rem 0.75rem; font-size: 0.75rem; color: var(--muted);
+      font-family: monospace;
+    }
+    .demo-screen { padding: 1.5rem; min-height: 280px; }
+    .demo-step-content { animation: fadeUp 0.4s ease both; }
+    .code-block {
+      background: rgba(0,0,0,0.4); border-radius: 10px; padding: 1rem;
+      font-family: monospace; font-size: 0.8rem; color: var(--brand3);
+      border: 1px solid rgba(67,233,123,0.2); margin-top: 0.75rem;
+      white-space: pre-wrap;
+    }
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.75rem 1rem; background: rgba(255,255,255,0.05); border-radius: 10px;
+      margin-top: 0.75rem;
+    }
+    .toggle-label { font-size: 0.85rem; }
+    .toggle-switch {
+      width: 44px; height: 24px; background: var(--brand); border-radius: 100px;
+      position: relative; cursor: pointer;
+    }
+    .toggle-switch::after {
+      content: ''; position: absolute; width: 18px; height: 18px;
+      background: white; border-radius: 50%; top: 3px; right: 3px;
+      transition: right 0.2s;
+    }
+    .ext-card {
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0.75rem 1rem; background: rgba(255,255,255,0.05); border-radius: 10px;
+      margin-top: 0.75rem;
+    }
+    .ext-card-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem; flex-shrink: 0;
+    }
+    .ext-card-name { font-size: 0.85rem; font-weight: 600; }
+    .ext-card-desc { font-size: 0.75rem; color: var(--muted); }
+    .btn-sm {
+      margin-left: auto; padding: 0.3rem 0.75rem; border-radius: 6px; font-size: 0.75rem;
+      font-weight: 600; background: linear-gradient(135deg, var(--brand), var(--brand2));
+      color: white; border: none; cursor: pointer; white-space: nowrap;
+    }
+
+    /* ===== MEDIA TYPES ===== */
+    .media-types-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+    }
+    .media-type-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 1.5rem 1rem; text-align: center;
+      transition: transform 0.3s, box-shadow 0.3s;
+    }
+    .media-type-card:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(108,99,255,0.15); }
+    .media-type-icon { font-size: 2rem; margin-bottom: 0.75rem; }
+    .media-type-card h4 { font-size: 0.9rem; font-weight: 700; margin-bottom: 0.4rem; }
+    .media-type-card p { font-size: 0.75rem; color: var(--muted); }
+
+    /* ===== TECH STACK ===== */
+    .tech-section { background: var(--dark3); }
+    .tech-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .tech-card {
+      display: flex; align-items: center; gap: 1rem;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1rem 1.25rem;
+    }
+    .tech-icon {
+      width: 44px; height: 44px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem; flex-shrink: 0;
+    }
+    .tech-card h4 { font-size: 0.88rem; font-weight: 700; margin-bottom: 0.2rem; }
+    .tech-card p { font-size: 0.75rem; color: var(--muted); }
+
+    /* ===== DOWNLOAD CTA ===== */
+    .cta-section {
+      text-align: center; padding: 6rem 2rem;
+      background: linear-gradient(135deg, rgba(108,99,255,0.1) 0%, rgba(255,101,132,0.08) 100%);
+      border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    }
+    .cta-section h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); font-weight: 800; margin-bottom: 1rem; }
+    .cta-section p { color: var(--muted); max-width: 500px; margin: 0 auto 2.5rem; }
+    .cta-buttons { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+
+    /* ===== FOOTER ===== */
+    footer {
+      position: relative; z-index: 1;
+      padding: 3rem 2rem 2rem;
+      border-top: 1px solid var(--border);
+      background: var(--dark2);
+    }
+    .footer-inner {
+      max-width: 1100px; margin: 0 auto;
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 1rem;
+    }
+    .footer-logo { display: flex; align-items: center; gap: 0.6rem; font-weight: 700; font-size: 0.95rem; }
+    .footer-links { display: flex; gap: 1.5rem; }
+    .footer-links a { color: var(--muted); text-decoration: none; font-size: 0.85rem; transition: color 0.2s; }
+    .footer-links a:hover { color: var(--text); }
+    .footer-credit { color: var(--muted); font-size: 0.8rem; text-align: center; margin-top: 2rem; }
+    .footer-credit a { color: var(--brand); text-decoration: none; }
+
+    /* ===== NOTICE BANNER ===== */
+    .notice {
+      background: rgba(108,99,255,0.12); border: 1px solid rgba(108,99,255,0.3);
+      border-radius: 12px; padding: 1rem 1.25rem;
+      display: flex; gap: 0.75rem; align-items: flex-start;
+      margin-bottom: 2rem;
+    }
+    .notice-icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 0.1rem; }
+    .notice h4 { font-size: 0.88rem; font-weight: 700; margin-bottom: 0.2rem; }
+    .notice p { font-size: 0.8rem; color: var(--muted); }
+
+    /* ===== RESPONSIVE NAV ===== */
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      nav { padding: 1rem; }
+    }
+
+    /* Scroll reveal animation */
+    .reveal {
+      opacity: 0; transform: translateY(30px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .reveal.visible { opacity: 1; transform: none; }
+  </style>
+</head>
+<body>
+
+  <!-- Background -->
+  <div class="bg-stars"></div>
+
+  <!-- Floating particles (created by JS) -->
+
+  <!-- ===== NAVBAR ===== -->
+  <nav>
+    <a class="nav-logo" href="#">
+      <div class="nav-logo-icon">⬇</div>
+      Media Downloader
+    </a>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#install">Install</a></li>
+      <li><a href="#media-types">Media Types</a></li>
+      <li><a href="#tech">Tech</a></li>
+    </ul>
+    <a class="nav-cta" href="https://github.com/Ibrahimdalxa/MediaDownloadermv3/archive/refs/heads/main.zip">
+      ⬇ Download ZIP
+    </a>
+  </nav>
+
+  <!-- ===== HERO ===== -->
+  <section class="hero">
+    <div class="hero-badge">
+      <span></span>
+      Chrome MV3 • Brave • Edge • Open Source
+    </div>
+    <h1>
+      Media Downloader<br>
+      <span class="gradient-text">Unleashed!!</span>
+    </h1>
+    <p>
+      Detect and download videos, audio, HLS streams, and subtitles from any website —
+      a powerful Chrome extension rebuilt from scratch for Manifest V3.
+    </p>
+    <div class="hero-buttons">
+      <a class="btn-primary" href="https://github.com/Ibrahimdalxa/MediaDownloadermv3/archive/refs/heads/main.zip">
+        ⬇ Download ZIP
+      </a>
+      <a class="btn-secondary" href="https://github.com/Ibrahimdalxa/MediaDownloadermv3">
+        ⭐ View on GitHub
+      </a>
+    </div>
+    <div class="browser-compat">
+      <div class="browser-badge"><div class="dot"></div> Google Chrome</div>
+      <div class="browser-badge"><div class="dot"></div> Brave Browser</div>
+      <div class="browser-badge"><div class="dot"></div> Microsoft Edge</div>
+    </div>
+    <div class="scroll-hint">
+      <span>Scroll to explore</span>
+      <div class="scroll-arrow"></div>
+    </div>
+  </section>
+
+  <!-- ===== FEATURES ===== -->
+  <section id="features">
+    <div class="container">
+      <div class="reveal">
+        <span class="section-label">✦ Features</span>
+        <h2 class="section-title">Everything you need to<br><span class="gradient-text">capture media</span></h2>
+        <p class="section-desc">Passively monitors all network traffic — no clicking required. Media appears in the popup as soon as it's detected.</p>
+      </div>
+      <div class="features-grid reveal">
+        <div class="feature-card">
+          <div class="feature-icon" style="background:rgba(108,99,255,0.15);">🎥</div>
+          <h3>Video Detection</h3>
+          <p>Automatically detects MP4, WebM, MKV, AVI, and more video formats as your browser loads them.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background:rgba(255,101,132,0.15);">🎵</div>
+          <h3>Audio Capture</h3>
+          <p>Captures MP3, OGG, AAC, FLAC, and other audio formats from any page you visit.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background:rgba(67,233,123,0.15);">📺</div>
+          <h3>HLS / M3U8 Streams</h3>
+          <p>Downloads live and VOD HLS streams, merges all segments into a single clean file automatically.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background:rgba(255,214,70,0.15);">📝</div>
+          <h3>Subtitle Files</h3>
+          <p>Detects SRT, VTT, ASS subtitle files so you can download captions alongside your media.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background:rgba(108,99,255,0.15);">📦</div>
+          <h3>Batch ZIP Download</h3>
+          <p>Select multiple media files and download them all at once packed in a convenient ZIP archive.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background:rgba(255,101,132,0.15);">🌍</div>
+          <h3>Multilingual UI</h3>
+          <p>Full support for English, German, French, and Portuguese — auto-detects your browser language.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background:rgba(67,233,123,0.15);">🔍</div>
+          <h3>Media Preview</h3>
+          <p>Preview videos and audio right in the extension before downloading. No surprises.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background:rgba(255,214,70,0.15);">⚙️</div>
+          <h3>Smart Filtering</h3>
+          <p>Filter by media type, size, and domain. Only see what matters to you.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== INSTALL STEPS ===== -->
+  <section id="install" class="install-section">
+    <div class="container">
+      <div class="reveal">
+        <span class="section-label">✦ Installation</span>
+        <h2 class="section-title">Up and running in<br><span class="gradient-text">4 simple steps</span></h2>
+        <p class="section-desc">No technical skills needed — just follow these steps and you're done!</p>
+      </div>
+
+      <div class="notice reveal">
+        <div class="notice-icon">ℹ️</div>
+        <div>
+          <h4>Developer Mode Required</h4>
+          <p>Since this extension isn't on the Chrome Web Store yet, you'll need to enable Developer Mode once — it's completely safe and reversible.</p>
+        </div>
+      </div>
+
+      <div class="steps-wrapper reveal">
+        <div class="steps-list">
+          <div class="step active" data-step="0" onclick="setStep(0)">
+            <div class="step-num">1</div>
+            <div class="step-content">
+              <h4>Download & Extract the ZIP</h4>
+              <p>Click the green "Code" button on GitHub → "Download ZIP", then extract it anywhere on your PC.</p>
+            </div>
+          </div>
+          <div class="step" data-step="1" onclick="setStep(1)">
+            <div class="step-num">2</div>
+            <div class="step-content">
+              <h4>Open Extensions Page</h4>
+              <p>Type <code>chrome://extensions/</code> in your address bar and press Enter.</p>
+            </div>
+          </div>
+          <div class="step" data-step="2" onclick="setStep(2)">
+            <div class="step-num">3</div>
+            <div class="step-content">
+              <h4>Enable Developer Mode</h4>
+              <p>Toggle "Developer mode" ON in the top-right corner of the Extensions page.</p>
+            </div>
+          </div>
+          <div class="step" data-step="3" onclick="setStep(3)">
+            <div class="step-num">4</div>
+            <div class="step-content">
+              <h4>Load Unpacked & Done!</h4>
+              <p>Click "Load unpacked" → select the extracted folder → click Select Folder. That's it! 🎉</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="demo-panel">
+          <div class="demo-bar">
+            <div class="demo-dot" style="background:#ff5f56;"></div>
+            <div class="demo-dot" style="background:#ffbd2e;"></div>
+            <div class="demo-dot" style="background:#27c93f;"></div>
+            <div class="demo-url" id="demo-url">github.com → Download ZIP</div>
+          </div>
+          <div class="demo-screen" id="demo-screen">
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== MEDIA TYPES ===== -->
+  <section id="media-types">
+    <div class="container">
+      <div class="reveal">
+        <span class="section-label">✦ Supported Formats</span>
+        <h2 class="section-title">Works with <span class="gradient-text">all media types</span></h2>
+        <p class="section-desc">Comprehensive format detection across videos, audio, streams, and subtitles.</p>
+      </div>
+      <div class="media-types-grid reveal">
+        <div class="media-type-card">
+          <div class="media-type-icon">🎬</div>
+          <h4>MP4 / M4V</h4>
+          <p>Standard video format used by most websites</p>
+        </div>
+        <div class="media-type-card">
+          <div class="media-type-icon">🎦</div>
+          <h4>WebM</h4>
+          <p>Open web video format by Google</p>
+        </div>
+        <div class="media-type-card">
+          <div class="media-type-icon">📼</div>
+          <h4>MKV</h4>
+          <p>Matroska container format</p>
+        </div>
+        <div class="media-type-card">
+          <div class="media-type-icon">📺</div>
+          <h4>HLS / M3U8</h4>
+          <p>HTTP Live Streaming segments</p>
+        </div>
+        <div class="media-type-card">
+          <div class="media-type-icon">🎵</div>
+          <h4>MP3 / AAC</h4>
+          <p>Standard audio formats</p>
+        </div>
+        <div class="media-type-card">
+          <div class="media-type-icon">🎙️</div>
+          <h4>OGG / FLAC</h4>
+          <p>Open audio formats</p>
+        </div>
+        <div class="media-type-card">
+          <div class="media-type-icon">💬</div>
+          <h4>SRT / VTT</h4>
+          <p>Subtitle and caption files</p>
+        </div>
+        <div class="media-type-card">
+          <div class="media-type-icon">📋</div>
+          <h4>ASS / SSA</h4>
+          <p>Advanced subtitle scripts</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== TECH ===== -->
+  <section id="tech" class="tech-section">
+    <div class="container">
+      <div class="reveal">
+        <span class="section-label">✦ Technology</span>
+        <h2 class="section-title">Built with <span class="gradient-text">modern APIs</span></h2>
+        <p class="section-desc">Fully rebuilt for Chrome Manifest V3 — no deprecated APIs, no compatibility hacks.</p>
+      </div>
+      <div class="tech-grid reveal">
+        <div class="tech-card">
+          <div class="tech-icon" style="background:rgba(108,99,255,0.15);">⚙️</div>
+          <div>
+            <h4>Chrome MV3</h4>
+            <p>Manifest V3 Service Worker architecture</p>
+          </div>
+        </div>
+        <div class="tech-card">
+          <div class="tech-icon" style="background:rgba(67,233,123,0.15);">🖥️</div>
+          <div>
+            <h4>Offscreen API</h4>
+            <p>DOM access from service worker context</p>
+          </div>
+        </div>
+        <div class="tech-card">
+          <div class="tech-icon" style="background:rgba(255,214,70,0.15);">📡</div>
+          <div>
+            <h4>HLS.js</h4>
+            <p>HLS stream download & segment merging</p>
+          </div>
+        </div>
+        <div class="tech-card">
+          <div class="tech-icon" style="background:rgba(255,101,132,0.15);">📦</div>
+          <div>
+            <h4>client-zip</h4>
+            <p>In-browser ZIP creation without a server</p>
+          </div>
+        </div>
+        <div class="tech-card">
+          <div class="tech-icon" style="background:rgba(108,99,255,0.15);">🎨</div>
+          <div>
+            <h4>MDUI</h4>
+            <p>Material Design UI components</p>
+          </div>
+        </div>
+        <div class="tech-card">
+          <div class="tech-icon" style="background:rgba(67,233,123,0.15);">🌍</div>
+          <div>
+            <h4>i18n API</h4>
+            <p>4-language support via Chrome i18n</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== CTA ===== -->
+  <section class="cta-section">
+    <div class="container reveal">
+      <h2>Ready to download <span class="gradient-text">any media?</span></h2>
+      <p>Free, open source, and works right in your browser. No accounts, no subscriptions, no limits.</p>
+      <div class="cta-buttons">
+        <a class="btn-primary" href="https://github.com/Ibrahimdalxa/MediaDownloadermv3/archive/refs/heads/main.zip">
+          ⬇ Download ZIP — Free
+        </a>
+        <a class="btn-secondary" href="https://github.com/Ibrahimdalxa/MediaDownloadermv3">
+          📖 Read the Docs
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== FOOTER ===== -->
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-logo">
+        <div class="nav-logo-icon" style="width:28px;height:28px;font-size:14px;">⬇</div>
+        Media Downloader Unleashed!!
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/Ibrahimdalxa/MediaDownloadermv3">GitHub</a>
+        <a href="https://github.com/Ibrahimdalxa/MediaDownloadermv3/issues">Issues</a>
+        <a href="https://github.com/helloyanis/media-downloader-unleashed">Original (Firefox)</a>
+        <a href="LICENSE">MIT License</a>
+      </div>
+    </div>
+    <div class="footer-credit">
+      Chrome MV3 port by <a href="https://github.com/Ibrahimdalxa" target="_blank">@Ibrahimdalxa</a> • Original Firefox extension by <a href="https://github.com/helloyanis" target="_blank">@helloyanis</a> • MIT Licensed
+    </div>
+  </footer>
+
+  <script>
+    // ===== FLOATING PARTICLES =====
+    const colors = ['#6c63ff','#ff6584','#43e97b','#ffd246'];
+    for (let i = 0; i < 20; i++) {
+      const p = document.createElement('div');
+      p.className = 'particle';
+      const size = Math.random() * 6 + 2;
+      p.style.cssText = `
+        width:${size}px; height:${size}px;
+        left:${Math.random()*100}%;
+        background:${colors[Math.floor(Math.random()*colors.length)]};
+        opacity:${Math.random()*0.4+0.1};
+        animation-duration:${Math.random()*15+10}s;
+        animation-delay:${Math.random()*10}s;
+      `;
+      document.body.appendChild(p);
+    }
+
+    // ===== SCROLL REVEAL =====
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); } });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    // ===== INSTALL DEMO =====
+    const demoSteps = [
+      {
+        url: 'github.com → Code → Download ZIP',
+        html: `
+          <div class="demo-step-content">
+            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem;">Click the green <strong style="color:var(--brand3)">Code</strong> button → <strong style="color:var(--brand3)">Download ZIP</strong></p>
+            <div style="background:rgba(0,0,0,0.3);border-radius:12px;padding:1rem;border:1px solid rgba(67,233,123,0.2);">
+              <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+                <span style="font-size:1.5rem;">📁</span>
+                <div>
+                  <div style="font-size:0.85rem;font-weight:700;">media-downloader-chrome-mv3-main.zip</div>
+                  <div style="font-size:0.75rem;color:var(--muted);">~1.4 MB • Extract after download</div>
+                </div>
+              </div>
+            </div>
+            <div class="code-block">📂 media-downloader-chrome-mv3-main/
+├── 📄 manifest.json  ← Load this folder!
+├── 📄 background.js
+├── 📄 popup.html
+└── ...</div>
+          </div>`
+      },
+      {
+        url: 'chrome://extensions/',
+        html: `
+          <div class="demo-step-content">
+            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem;">Type this in your address bar and press <strong style="color:var(--brand)">Enter</strong></p>
+            <div class="code-block">chrome://extensions/
+
+(Brave)  → brave://extensions/
+(Edge)   → edge://extensions/</div>
+            <div style="margin-top:1rem;padding:0.75rem;background:rgba(255,255,255,0.05);border-radius:10px;font-size:0.82rem;color:var(--muted);">
+              🔍 You can also click the <strong style="color:var(--text)">puzzle piece 🧩</strong> icon in your toolbar → Manage Extensions
+            </div>
+          </div>`
+      },
+      {
+        url: 'chrome://extensions/ → Developer Mode',
+        html: `
+          <div class="demo-step-content">
+            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem;">Toggle <strong style="color:var(--brand)">Developer mode</strong> ON in the top-right corner</p>
+            <div class="toggle-row">
+              <span class="toggle-label">🧑‍💻 Developer mode</span>
+              <div class="toggle-switch"></div>
+            </div>
+            <div style="margin-top:1rem;padding:0.75rem;background:rgba(108,99,255,0.1);border:1px solid rgba(108,99,255,0.3);border-radius:10px;font-size:0.8rem;color:var(--muted);">
+              ℹ️ <strong style="color:var(--text)">Safe to enable!</strong> This just allows loading local extensions. You can disable it anytime after installing.
+            </div>
+          </div>`
+      },
+      {
+        url: 'Extension loaded successfully! ✅',
+        html: `
+          <div class="demo-step-content">
+            <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem;">Click <strong style="color:var(--brand3)">Load unpacked</strong> → select the extracted folder → done!</p>
+            <div class="ext-card">
+              <div class="ext-card-icon">⬇</div>
+              <div>
+                <div class="ext-card-name">Media Downloader Unleashed!!</div>
+                <div class="ext-card-desc">Chrome MV3 Port • v4.1.11</div>
+              </div>
+              <button class="btn-sm">Enabled ✓</button>
+            </div>
+            <div style="margin-top:1rem;padding:0.75rem;background:rgba(67,233,123,0.1);border:1px solid rgba(67,233,123,0.3);border-radius:10px;font-size:0.82rem;color:var(--muted);">
+              🎉 <strong style="color:var(--brand3)">Done!</strong> Pin the extension icon to your toolbar by clicking 🧩 → pin next to "Media Downloader"
+            </div>
+          </div>`
+      }
+    ];
+
+    let currentStep = 0;
+
+    function setStep(i) {
+      currentStep = i;
+      document.querySelectorAll('.step').forEach((s, idx) => {
+        s.classList.toggle('active', idx === i);
+      });
+      document.getElementById('demo-url').textContent = demoSteps[i].url;
+      document.getElementById('demo-screen').innerHTML = demoSteps[i].html;
+    }
+
+    setStep(0);
+
+    // Auto-advance steps
+    setInterval(() => {
+      setStep((currentStep + 1) % 4);
+    }, 4000);
+  </script>
+</body>
+</html>
