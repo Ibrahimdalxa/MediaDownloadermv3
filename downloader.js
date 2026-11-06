@@ -1,0 +1,2423 @@
+/*
+Copyright © 2026 🦊 helloyanis
+Rebuilt for Chrome MV3
+*/
+
+if (typeof browser === 'undefined') {
+  var browser = chrome;
+}
+
+const DB_NAME = "MediaCacheDB";
+const STORE_NAME = "network-cache";
+
+function openCacheDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onerror = (event) => reject(event.target.error || "IDB Open Error");
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: "url" });
+      }
+    };
+    request.onsuccess = (event) => resolve(event.target.result);
+  });
+}
+
+const ongoingDownloads = new Map(); // requestId -> {abortController, ...}
+const pendingPromptResolvers = new Map(); // requestId -> {resolve}
+
+function sanitizeFileName(name) {
+  // Remove invalid characters for file names
+  return name.replace(/[.<>:"/\\|?*\x00-\x1F]/g, '_').trim();
+}
+
+function isAbortError(error) {
+  return !!(
+    error && (
+      error.name === 'AbortError' ||
+      (typeof error.message === 'string' && /abort|cancel/i.test(error.message))
+    )
+  );
+}
+
+async function isAndroid() {
+  // Used to check if the add-on should initiate downloads from the background or if it should queue them for the popup to handle, since on Firefox for Android, downloads triggered from background scripts using the downloads API or blob URLs don't work properly.
+  const forcedDeviceType = await browser.storage.local.get('force-device-type').then(result => result['force-device-type']);
+  if (forcedDeviceType === 'android') {
+    return true;
+  }
+  if (forcedDeviceType === 'desktop') {
+    return false;
+  }
+  return navigator.userAgent.includes("Mobile;")
+}
+
+async function getQueuedAndroidDownloads() {
+  return browser.storage.session.get('queuedAndroidDownloads').then((result) => result.queuedAndroidDownloads || []);
+}
+
+async function getPendingPopupState() {
+  return browser.storage.session.get('pendingPopupState').then((result) => result.pendingPopupState || null);
+}
+
+async function refreshExtensionBadge() {
+  const pendingPopupState = await getPendingPopupState();
+  if (pendingPopupState) {
+    browser.action.setBadgeBackgroundColor({ color: '#FF9800' });
+    if (browser.action.setBadgeTextColor) browser.action.setBadgeTextColor({ color: '#000000' });
+    browser.action.setBadgeText({ text: '!' });
+    return;
+  }
+
+  if (ongoingDownloads.size > 0) {
+    const downloads = Array.from(ongoingDownloads.values());
+    const totalPercentage = downloads.length
+      ? Math.round(downloads.reduce((acc, d) => acc + (d.progress?.percentage || 0), 0) / downloads.length)
+      : 0;
+    browser.action.setBadgeBackgroundColor({ color: '#808080' });
+    if (browser.action.setBadgeTextColor) browser.action.setBadgeTextColor({ color: '#FFFFFF' });
+    browser.action.setBadgeText({ text: totalPercentage > 0 ? `${totalPercentage}%` : '' });
+    return;
+  }
+
+  const queuedDownloads = await getQueuedAndroidDownloads();
+  if (queuedDownloads.length > 0) {
+    browser.action.setBadgeBackgroundColor({ color: '#4CAF50' });
+    if (browser.action.setBadgeTextColor) browser.action.setBadgeTextColor({ color: '#000000' });
+    browser.action.setBadgeText({ text: '!' });
+    return;
+  }
+
+  browser.action.setBadgeText({ text: '' });
+}
+
+/**
+ * Queue a download for Android (fetch method).
+ * On Firefox for Android, downloads triggered from background scripts using the downloads API or blob URLs don't work properly, so we need to queue them and let the popup handle the actual download when the user opens it.
+ */
+async function queueAndroidDownload(blob, filename, requestId) {
+  try {
+    const blobUrl = URL.createObjectURL(blob);
+    const queuedDownloads = await browser.storage.session.get('queuedAndroidDownloads').then(r => r.queuedAndroidDownloads || []);
+    
+    queuedDownloads.push({
+      requestId,
+      filename,
+      blobUrl,
+      timestamp: Date.now()
+    });
+    
+    await browser.storage.session.set({ queuedAndroidDownloads: queuedDownloads });
+    await refreshExtensionBadge();
+    // Attempt to send message to frontend, if open, to trigger immediate download without waiting for popup open
+    browser.runtime.sendMessage({ action: 'triggerQueuedAndroidDownloads' }).catch(() => {console.warn('No popup to trigger queued Android downloads');});
+  } catch (error) {
+    console.error('Error queuing Android download:', error);
+  }
+}
+
+async function setPendingPopupState(state) {
+  await browser.storage.session.set({ pendingPopupState: state });
+  await refreshExtensionBadge();
+}
+
+async function clearPendingPopupState(requestId) {
+  const pendingPopupState = await getPendingPopupState();
+  if (pendingPopupState && (!requestId || pendingPopupState.requestId === requestId)) {
+    await browser.storage.session.remove('pendingPopupState');
+  }
+  await refreshExtensionBadge();
+}
+
+function waitForPopupResolution(requestId) {
+  return new Promise((resolve) => {
+    pendingPromptResolvers.set(requestId, { resolve });
+  });
+}
+
+async function requestPopupPrompt(requestId, state, message) {
+  await setPendingPopupState(state);
+  const waitForResult = waitForPopupResolution(requestId);
+  browser.runtime.sendMessage(message).catch(() => {});
+  return waitForResult;
+}
+
+function createAbortError() {
+  return new DOMException('Download cancelled by user.', 'AbortError');
+}
+
+function registerAbortController(requestId, url) {
+  const existing = ongoingDownloads.get(requestId) || {};
+  const abortController = new AbortController();
+  ongoingDownloads.set(requestId, {
+    ...existing,
+    requestId,
+    url,
+    status: 'in-progress',
+    abortController
+  });
+  return abortController;
+}
+/**
+ * Tries to fetch from IndexedDB cache first.
+ * If missing, falls back to network fetch.
+ */
+async function fetchWithCache(url, options = {}, skipCache = false) {
+  const isIncognito = (typeof browser !== 'undefined' && browser.extension && browser.extension.inIncognitoContext) || false;
+  if (skipCache || (isIncognito && await browser.storage.local.get("media-cache-private").then((result) => result["media-cache-private"]) !== "1") || (!isIncognito && await browser.storage.local.get("media-cache").then((result) => result["media-cache"]) !== "1")) {
+    // Bypass cache in incognito/private mode or if media-cache is disabled
+    console.log("⚡ Bypassing cache for:", url);
+    return fetch(url, options);
+  }
+
+  try {
+    const db = await openCacheDB();
+    const cachedItem = await new Promise((resolve, reject) => {
+      const tx = db.transaction([STORE_NAME], "readonly");
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(url);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+    if (cachedItem && cachedItem.data) {
+      console.log("⚡ IndexedDB Cache hit for:", url);
+      const responseHeaders = new Headers();
+
+      for (const h of cachedItem.headers || []) {
+        responseHeaders.append(h.name, h.value);
+      }
+      return new Response(cachedItem.data, {
+        status: cachedItem.status,
+        statusText: "OK (Cached)",
+        headers: responseHeaders || []
+      });
+    } else {
+      console.log("⚡ IndexedDB Cache miss for:", url);
+    }
+  } catch (e) {
+    console.warn("Cache lookup failed/miss, fetching from network:", e);
+  }
+
+  // Fallback to standard network request
+  return fetch(url, options);
+}
+// ----------------------------------------
+
+async function downloadRawMedia(url, fileName, headers, downloadMethod, request, skipCache = false) {
+  try {
+  const abortController = registerAbortController(request.requestId, url);
+  const signal = abortController.signal;
+  let headersArr = []
+  headers.forEach(h => {
+    headersArr.push({ name: h.name, value: h.value });
+  });
+      handleProgressUpdate({ action: 'updateProgress', percentage: null, requestId: request.requestId, processed: null, total: null }); // Initialize progress
+      fileName = sanitizeFileName(fileName);
+      if (downloadMethod === 'browser') {
+      // Use the browser.downloads API to download the file
+      const downloadOptions = {
+        url,
+        filename: fileName
+      };
+      if (typeof browser !== 'undefined' && !navigator.userAgent.includes("Chrome")) {
+        downloadOptions.headers = headersArr;
+        downloadOptions.method = request.method;
+      }
+      browser.downloads.download(downloadOptions).then((downloadId) => {
+        console.log('Media file downloaded:', downloadId);
+        handleDownloadCompletion(request.requestId);
+        browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+      }).catch((error) => {
+        console.error('Error downloading media file with browser download method:', error);
+        handleDownloadCompletion(request.requestId, true);
+      });
+
+    } else {
+      // Use fetch to download the file
+      // Get the request headers as an object to spoof the request
+
+      // Send the request by fetching the URL with the appropriate method and headers (referrer can't be set in headers but can be set as a fetch option) so servers will think the request is coming from the same site
+      const response = await fetchWithCache(url, {
+        method: request.method,
+        headers: Object.fromEntries(headers.map(h => [h.name, h.value])),
+        referrer: request.requestHeaders.find(h => h.name.toLowerCase() === "referer")?.value,
+        body: request.method !== 'GET' ? request.requestBody : null,
+        signal,
+      },
+      skipCache);
+
+      if (!response.ok) {
+        throw new Error(`Error downloading media file with fetch: ${response.status}`);
+      }
+
+      // Get the total size from Content-Length header
+      const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
+      
+      // Update loading bar to show determinate progress
+        if (contentLength > 0) {
+          handleProgressUpdate({ action: 'updateProgress', percentage: 0, requestId: request.requestId, processed: 0, total: contentLength });
+        }
+
+      // Read the response body as a stream to track progress
+      const reader = response.body.getReader();
+      const chunks = [];
+      let receivedLength = 0;
+
+      try {
+        while (true) {
+          if (signal.aborted) {
+            throw createAbortError();
+          }
+          const { done, value } = await reader.read();
+          
+          if (done) break;
+          
+          chunks.push(value);
+          receivedLength += value.length;
+          
+          // Update progress bar if we know the total size
+          if (contentLength > 0) {
+            const progress = receivedLength / contentLength;
+            handleProgressUpdate({ action: 'updateProgress', percentage: Math.round(progress * 100), requestId: request.requestId, processed: receivedLength, total: contentLength });
+          }
+        }
+      } catch (error) {
+        reader.cancel();
+        throw new Error(`Error reading response stream: ${error.message}`);
+      }
+
+      // Create a blob from the chunks and trigger a download
+      const blob = new Blob(chunks);
+      
+      // For Android with fetch method, queue the download instead of triggering immediately
+      if (await isAndroid() && downloadMethod === 'fetch') {
+        await queueAndroidDownload(blob, fileName, request.requestId);
+        browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+        handleDownloadCompletion(request.requestId);
+        return;
+      }
+      
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      console.log('Media file downloaded:', blobUrl);
+      URL.revokeObjectURL(blobUrl); // Clean up the blob URL
+      browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+      handleDownloadCompletion(request.requestId);
+    }
+  } catch (e) {
+    if (isAbortError(e)) {
+      browser.runtime.sendMessage({ action: 'downloadCancelled', requestId: request.requestId });
+      await handleDownloadCompletion(request.requestId, false, true);
+      throw new Error('DOWNLOAD_CANCELLED');
+    }
+    console.error("Error during raw media download:", e);
+    browser.runtime.sendMessage({ action: 'downloadFailed', requestId: request.requestId, message: e.message || String(e) });
+    handleDownloadCompletion(request.requestId, true);
+    throw e; // Re-throw to allow popup.js to handle it as well
+  }
+}
+
+/**
+ * Downloads and converts an M3U8 stream to an MP4 file for offline use.
+ * Uses either browser.downloads API or fetch depending on the download method.
+ * Most of the code here is chatGPT so good luck finding out what it does lol (ㆆ_ㆆ)
+ * @params {String} m3u8Url - The URL of the M3U8 manifest to download.
+ * @params {String} fileName - The name of the file to save the downloaded content as.
+ * @params {Array} headers - The headers to include in the request. The headers forbidden by fetch like Sec-* should be omitted from this array before calling this function.
+ * @params {String} downloadMethod - The method to use for downloading. Either "browser" to use browser.downloads API or "fetch" to use fetch and create a blob URL.
+ * @params {Object} request - The request object containing the request details.
+ */
+async function downloadM3U8Offline(m3u8Url, fileName, headers, downloadMethod, request, skipCache = false) {
+  try {
+    const abortController = registerAbortController(request.requestId, m3u8Url);
+    const signal = abortController.signal;
+    // Add the current download to the ongoingDownloads map
+    handleProgressUpdate({ action: 'updateProgress', percentage: null, requestId: request.requestId, processed: null, total: null }); // Initialize progress
+    const getText = async (url) => {
+      const res = await fetchWithCache(url, {
+        headers: Object.fromEntries(headers.map(h => [h.name, h.value])),
+        method: request.method,
+        referrer:
+          request.requestHeaders.find(h => h.name.toLowerCase() === "referer")?.value || "",
+        body: request.method !== 'GET' ? request.requestBody : null,
+        signal
+      },
+    skipCache);
+      return res.text();
+    };
+
+    const m3u8Text = await getText(m3u8Url);
+    const isMasterPlaylist = m3u8Text.includes("#EXT-X-STREAM-INF");
+
+    let videoUrl = m3u8Url;
+    let videoUrls = [m3u8Url];
+    let audioUrl = null;
+    let audioUrls = [];
+
+    if (isMasterPlaylist) {
+      const lines = m3u8Text.split("\n");
+      const base = m3u8Url.substring(0, m3u8Url.lastIndexOf("/") + 1);
+
+      const selectedTracks = await selectStreamVariant(lines, base, {
+        headers: Object.fromEntries(headers.map(h => [h.name, h.value])),
+        referrer: request.requestHeaders.find(h => h.name.toLowerCase() === "referer")?.value,
+        method: request.method,
+        requestId: request.requestId,
+        url: m3u8Url
+      }, skipCache);
+      if (!selectedTracks) {
+        //User canceled the variant selection, abort the download
+        throw new Error("Download aborted by user during stream variant selection.");
+      }
+      const selectedVideoTracks = selectedTracks.filter(track => track.type === 'video');
+      const selectedAudioTracks = selectedTracks.filter(track => track.type === 'audio');
+      const invalidTrack = selectedTracks.find(track => !track.uri);
+      if (invalidTrack) {
+        throw new Error('The selected M3U8 track did not include a valid playlist URL.');
+      }
+      videoUrls = selectedVideoTracks.map(track => ({
+        url: new URL(track.uri, base).href,
+        name: track.name,
+        bandwidth: track.bandwidth
+      }));
+      videoUrl = videoUrls[0]?.url || null;
+      audioUrls = selectedAudioTracks.map(track => ({
+        url: new URL(track.uri, base).href,
+        name: track.name,
+        language: track.language,
+        bandwidth: track.bandwidth
+      }));
+      audioUrl = audioUrls[0]?.url || null;
+      if (!videoUrl && !audioUrls.length) {
+        browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+        handleDownloadCompletion(request.requestId);
+        return;
+      }
+    }
+    if (audioUrl) {
+      // Display a snackbar message informing the user about the separate audio stream
+      browser.runtime.sendMessage({ action: 'showAudioStreamSnackbar', requestId: request.requestId });
+    }
+
+    async function downloadSegments(playlistUrl) {
+      const playlistText = await getText(playlistUrl);
+      const rawLines = playlistText.split(/\r?\n/);
+
+      // helpers for fetch options
+      const fetchOpts = {
+        headers: Object.fromEntries(headers.map(h => [h.name, h.value])),
+        referrer: request.requestHeaders.find(h => h.name.toLowerCase() === "referer")?.value,
+        method: request.method,
+        signal
+      };
+
+      // parse media-sequence if present
+      let mediaSeq = 0;
+      let hasDRM, drmAbort = false;
+      for (const l of rawLines) {
+        if (/^#EXT-X-KEY:/i.test(l)) {
+          const method = (l.match(/METHOD=([^,]*)/) || [null, null])[1];
+          if (method && method.toUpperCase().includes("SAMPLE-AES")) {
+            hasDRM = true;
+            break;
+          }
+        }
+        const m = l.match(/^#EXT-X-MEDIA-SEQUENCE:(\d+)/);
+        if (m) { mediaSeq = parseInt(m[1], 10); break; }
+      }
+
+      if (hasDRM) {
+        const promptResult = await requestPopupPrompt(request.requestId, {
+          type: 'drmWarning',
+          requestId: request.requestId,
+          url: playlistUrl
+        }, {
+          action: 'promptDRMWarning',
+          requestId: request.requestId,
+          url: playlistUrl
+        });
+
+        drmAbort = !(promptResult && promptResult.continue);
+      }
+
+      if (drmAbort) {
+        throw new Error("Download aborted by user due to DRM protection.");
+      }
+
+      // Build ordered list of playlist "items" so we can process sequentially
+      const items = []; // {type: 'key'|'map'|'segment', ...}
+      for (let i = 0; i < rawLines.length; i++) {
+        const line = rawLines[i].trim();
+        if (!line) continue;
+
+        if (line.startsWith('#EXT-X-KEY')) {
+          // capture the full line for attribute parsing later
+          items.push({ type: 'key', raw: line });
+        } else if (line.startsWith('#EXT-X-MAP')) {
+          items.push({ type: 'map', raw: line });
+        } else if (line.startsWith('#')) {
+          // other tags ignored here
+          continue;
+        } else {
+          // segment URI line
+          items.push({ type: 'segment', uri: new URL(line, playlistUrl).href, rawUri: line });
+        }
+      }
+
+      const segCount = items.filter(it => it.type === 'segment').length;
+
+      const parts = [];
+      let container = null; // 'fmp4' | 'ts' | 'unknown'
+
+      // encryption state
+      let currentKeyBuffer = null;   // ArrayBuffer containing 16 raw bytes
+      let currentKeyUri = null;      // string
+      let currentKeyIV = null;       // Uint8Array(16) or null
+
+      // segment-based sequence for IV when not provided in EXT-X-KEY
+      let processedSegmentIndex = 0; // counts only segments (for IV calc)
+
+      // utility: build 16-byte IV where last 8 bytes are the sequence number (big-endian)
+      function makeSequenceIV(seq) {
+        const iv = new Uint8Array(16);
+        const dv = new DataView(iv.buffer);
+        // prefer setBigUint64 if available for clarity/precision
+        if (typeof dv.setBigUint64 === 'function') {
+          try {
+            dv.setBigUint64(8, BigInt(seq), false); // big-endian, offset 8
+          } catch (e) {
+            // fallback below
+            const high = Math.floor(seq / 0x100000000);
+            const low = seq >>> 0;
+            dv.setUint32(8, high, false);
+            dv.setUint32(12, low, false);
+          }
+        } else {
+          const high = Math.floor(seq / 0x100000000);
+          const low = seq >>> 0;
+          dv.setUint32(8, high, false);  // bytes 8..11
+          dv.setUint32(12, low, false);  // bytes 12..15
+        }
+        return iv;
+      }
+
+      // small util: decode key response robustly (raw 16 bytes / base64 / hex)
+      async function fetchAndDecodeKey(keyHref, fetchOpts) {
+        const res = await fetchWithCache(keyHref, fetchOpts, skipCache);
+        const ab = await res.arrayBuffer();
+
+        // 1. If it's exactly 16 bytes, it's the raw key
+        if (ab.byteLength === 16) return ab;
+
+        // 2. Otherwise, treat as text to check for Hex or Base64
+        const text = new TextDecoder().decode(ab).trim().replace(/^"(.*)"$/, '$1').trim();
+
+        // Try Hex (32 hex chars)
+        if (/^[0-9a-fA-F]{32}$/.test(text)) {
+          const u = new Uint8Array(16);
+          for (let i = 0; i < 16; i++) u[i] = parseInt(text.substr(i * 2, 2), 16);
+          return u.buffer;
+        }
+
+        // Try Base64 (A 16-byte key is 24 chars in Base64 including padding)
+        if (text.length >= 22 && text.length <= 24) {
+          try {
+            const bin = atob(text);
+            const u = Uint8Array.from(bin, c => c.charCodeAt(0));
+            if (u.byteLength === 16) return u.buffer;
+          } catch (e) { }
+        }
+
+        throw new Error(`Invalid key length: ${ab.byteLength} bytes. Expected 16.`);
+      }
+
+      // Decrypt helper (defensive: accept Uint8Array or ArrayBuffer)
+      async function decryptSegment(encryptedBuffer, keyBuffer, iv) {
+        const cryptoKey = await crypto.subtle.importKey(
+          "raw",
+          keyBuffer,
+          { name: "AES-CBC" },
+          false,
+          ["decrypt"]
+        );
+
+        try {
+          const decrypted = await crypto.subtle.decrypt(
+            { name: "AES-CBC", iv },
+            cryptoKey,
+            encryptedBuffer
+          );
+          return new Uint8Array(decrypted);
+        } catch (e) {
+          // If decryption fails here, the Key or IV is almost certainly wrong
+          throw new Error(`WebCrypto Decrypt Failed. Check if the key/IV is correct for this segment.`);
+        }
+      }
+
+      // process items sequentially
+      for (let idx = 0; idx < items.length; idx++) {
+        if (signal.aborted) {
+          throw createAbortError();
+        }
+        const it = items[idx];
+
+        if (it.type === 'key') {
+          // parse attributes: METHOD=..., URI="...", IV=0x...
+          const line = it.raw;
+          const method = (line.match(/METHOD=([^,]*)/) || [null, null])[1];
+          const uriMatch = line.match(/URI="([^"]+)"/);
+          const ivMatch = line.match(/IV=0x([0-9a-fA-F]+)/);
+
+          if (!method) {
+            // If method not present, treat it as NONE to be safe
+            currentKeyBuffer = null;
+            currentKeyUri = null;
+            currentKeyIV = null;
+            continue;
+          }
+
+          if (method === 'NONE') {
+            currentKeyBuffer = null;
+            currentKeyUri = null;
+            currentKeyIV = null;
+            continue;
+          }
+
+          if (method === 'AES-128') {
+            if (!uriMatch) {
+              throw new Error('AES-128 key line without URI');
+            }
+            const keyHref = new URL(uriMatch[1], playlistUrl).href;
+
+            // parse IV if present
+            if (ivMatch) {
+              const ivHex = ivMatch[1];
+              const ivBytes = Uint8Array.from(ivHex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+              // If shorter than 16, pad left with zeros (shouldn't normally happen)
+              if (ivBytes.length < 16) {
+                const padded = new Uint8Array(16);
+                padded.set(ivBytes, 16 - ivBytes.length);
+                currentKeyIV = padded;
+              } else {
+                currentKeyIV = ivBytes;
+              }
+            } else {
+              currentKeyIV = null; // use sequence-derived IV for segments when needed
+            }
+
+            // Only fetch key if URI changed (key rotation)
+            if (keyHref !== currentKeyUri) {
+              currentKeyBuffer = await fetchAndDecodeKey(keyHref, fetchOpts);
+              currentKeyUri = keyHref;
+
+              // debug
+              try {
+                const kb = new Uint8Array(currentKeyBuffer);
+                console.debug('Fetched HLS key from', keyHref, 'len=', kb.byteLength, 'hex=', Array.from(kb).map(b => b.toString(16).padStart(2, '0')).join(''));
+              } catch (e) { /* ignore */ }
+            }
+            continue;
+          }
+
+          // unsupported METHOD — clear key for safety
+          currentKeyBuffer = null;
+          currentKeyUri = null;
+          currentKeyIV = null;
+          continue;
+        }
+
+        if (it.type === 'map') {
+          // parse URI
+          const mapUriMatch = it.raw.match(/URI="([^"]+)"/);
+          if (!mapUriMatch) continue;
+          const mapHref = new URL(mapUriMatch[1], playlistUrl).href;
+
+          const mapRes = await fetchWithCache(mapHref, fetchOpts, skipCache);
+          let mapData = new Uint8Array(await mapRes.arrayBuffer());
+
+          // determine container from map if not set
+          if (!container) {
+            const ct = (mapRes.headers.get && mapRes.headers.get('content-type') || '').toLowerCase();
+            if (ct.includes('mp4') || ct.includes('iso') || ct.includes('fmp4')) container = 'fmp4';
+            else {
+              const hdr = String.fromCharCode(...mapData.slice(4, 8));
+              if (hdr === 'ftyp' || hdr === 'styp') container = 'fmp4';
+            }
+          }
+
+          // decrypt map if key active
+          if (currentKeyBuffer) {
+            // build IV for map: if currentKeyIV provided, use it; else IV for init per spec usually sequence "0"
+            const iv = currentKeyIV
+              ? currentKeyIV
+              : makeSequenceIV(0); // use sequence 0 for initial map when IV not present
+
+            mapData = await decryptSegment(mapData, currentKeyBuffer, iv);
+          }
+
+          parts.push(mapData);
+          // mark container as fmp4 (init -> fmp4)
+          container = container || 'fmp4';
+          continue;
+        }
+
+        if (it.type === 'segment') {
+          // fetch the segment
+          let segUrl = it.uri;
+          try {
+            // Attempt to append any recorded override query parameters for this segment directory
+            const segUrlObj = new URL(segUrl);
+            const dirKey = segUrlObj.origin + segUrlObj.pathname.substring(0, segUrlObj.pathname.lastIndexOf('/') + 1);
+            const stored = await browser.storage.session.get('segmentParamOverrides');
+            const overrides = (stored && stored.segmentParamOverrides) ? stored.segmentParamOverrides : {};
+            const overrideForDir = overrides[dirKey];
+            if (overrideForDir && overrideForDir.extraParams) {
+              for (const [k, v] of Object.entries(overrideForDir.extraParams)) {
+                if (!segUrlObj.searchParams.has(k)) {
+                  segUrlObj.searchParams.append(k, v);
+                }
+              }
+              segUrl = segUrlObj.href;
+              console.debug('Appended override params to segment URL:', segUrl);
+            }
+          } catch (e) {
+            console.debug('Failed to apply segment param overrides for', segUrl, e);
+          }
+
+          const res = await fetchWithCache(segUrl, fetchOpts, skipCache);
+          let arr = new Uint8Array(await res.arrayBuffer());
+
+          // container detection from first segment if unknown
+          if (!container && processedSegmentIndex === 0) {
+            const ct = (res.headers.get && res.headers.get('content-type') || '').toLowerCase();
+            if (ct.includes('mp4') || ct.includes('iso') || ct.includes('fmp4')) container = 'fmp4';
+            else if (arr[0] === 0x47) container = 'ts';
+            else {
+              const hdr = String.fromCharCode(...arr.slice(4, 8));
+              if (hdr === 'ftyp' || hdr === 'styp') container = 'fmp4';
+              else container = 'unknown';
+            }
+          }
+
+          // decrypt only if we currently have a key
+          if (currentKeyBuffer) {
+            // determine IV: currentKeyIV or sequence-based (mediaSeq + processedSegmentIndex)
+            const seq = mediaSeq + processedSegmentIndex + 1;
+            const iv = currentKeyIV
+              ? currentKeyIV
+              : makeSequenceIV(seq);
+
+            try {
+              console.debug('key hex', Array.from(new Uint8Array(currentKeyBuffer)).map(b => b.toString(16).padStart(2, '0')).join(''), 'iv hex', Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''), 'for segment seq', seq, 'url', segUrl);
+              console.debug('iv used for segment:', Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''));
+
+              arr = await decryptSegment(arr, currentKeyBuffer, iv);
+            } catch (e) {
+              throw new Error(`Decryption failed for segment ${segUrl}: ${e.message || e}`);
+            }
+          }
+
+          parts.push(arr);
+          processedSegmentIndex++;
+
+          // update progress
+          globalProcessedSegments++;
+          handleProgressUpdate({ action: 'updateProgress', percentage: Math.round((globalProcessedSegments / globalTotalSegments) * 100), requestId: request.requestId, processed: globalProcessedSegments, total: globalTotalSegments });
+
+          continue;
+        }
+      } // end for items
+
+      // create final blob and extension
+      if (container === 'fmp4') {
+        const finalBlob = new Blob(parts, { type: "video/mp4" });
+        return { blob: finalBlob, ext: '.mp4' };
+      } else {
+        const finalBlob = new Blob(parts, { type: "video/mp2t" });
+        return { blob: finalBlob, ext: '.ts' };
+      }
+    }
+
+    async function countSegments(playlistUrl) {
+      const text = await getText(playlistUrl);
+      return text.split(/\r?\n/).filter(line => line && !line.startsWith('#')).length;
+    }
+
+    let globalTotalSegments = 0;
+    let globalProcessedSegments = 0;
+
+
+    // Count segments first
+    for (const videoTrack of videoUrls) {
+      globalTotalSegments += await countSegments(typeof videoTrack === 'string' ? videoTrack : videoTrack.url);
+    }
+
+    if (audioUrls.length) {
+      for (const audioTrack of audioUrls) {
+        globalTotalSegments += await countSegments(audioTrack.url);
+      }
+    }
+
+    // Then download video
+    const downloadedTracks = [];
+    for (const [index, videoTrack] of videoUrls.entries()) {
+      const videoResult = await downloadSegments(typeof videoTrack === 'string' ? videoTrack : videoTrack.url);
+      downloadedTracks.push({ ...videoResult, type: 'video', name: videoTrack.name, bandwidth: videoTrack.bandwidth, index });
+    }
+    const baseFileName = sanitizeFileName(fileName);
+    const getTrackSuffix = (track, index) => {
+      if (track.name) return `_${sanitizeFileName(track.name)}`;
+      if (track.bandwidth) return `_${Math.round(track.bandwidth / 1000)}kbps`;
+      return `_track${index + 1}`;
+    };
+
+    // For Android with fetch method, queue the download instead of triggering immediately
+    if (await isAndroid() && downloadMethod === 'fetch') {
+      for (const track of downloadedTracks) {
+        const suffix = downloadedTracks.length > 1 ? getTrackSuffix(track, track.index) : '';
+        await queueAndroidDownload(track.blob, `${baseFileName}${track.type === 'video' ? '_video' : '_audio'}${sanitizeFileName(suffix)}${track.ext}`, request.requestId);
+      }
+      for (const [index, audioTrack] of audioUrls.entries()) {
+        const audioResult = await downloadSegments(audioTrack.url);
+        const suffix = audioTrack.name ? `_${sanitizeFileName(audioTrack.name)}` : audioTrack.bandwidth ? `_${Math.round(audioTrack.bandwidth / 1000)}kbps` : `_track${index + 1}`;
+        await queueAndroidDownload(audioResult.blob, `${baseFileName}_audio${suffix}${audioResult.ext}`, request.requestId);
+      }
+      
+      browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+      handleDownloadCompletion(request.requestId);
+      return;
+    }
+
+    for (const track of downloadedTracks) {
+      const objectUrl = URL.createObjectURL(track.blob);
+      const suffix = downloadedTracks.length > 1 ? getTrackSuffix(track, track.index) : '';
+      const filename = `${baseFileName}${audioUrls.length ? '_video' : ''}${sanitizeFileName(suffix)}${track.ext}`;
+      if (downloadMethod === "browser") {
+        await browser.downloads.download({ url: objectUrl, filename });
+      } else {
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+      }
+      URL.revokeObjectURL(objectUrl);
+    }
+
+
+    if (audioUrls.length) {
+      const snackbar = document.createElement('mdui-snackbar');
+      snackbar.setAttribute('open', true);
+      snackbar.setAttribute('timeout', 10000);
+      snackbar.textContent = browser.i18n.getMessage("downloadingAudioSnackbar")
+      document.body.appendChild(snackbar);
+      snackbar.addEventListener('close', () => {
+        snackbar.remove();
+      });
+      const audioFiles = [];
+      for (const [index, audioTrack] of audioUrls.entries()) {
+        const audioResult = await downloadSegments(audioTrack.url);
+        const suffix = audioTrack.name ? `_${sanitizeFileName(audioTrack.name)}` : audioTrack.bandwidth ? `_${Math.round(audioTrack.bandwidth / 1000)}kbps` : `_track${index + 1}`;
+        const filename = `${baseFileName}_audio${suffix}${audioResult.ext}`;
+        const audioBlobUrl = URL.createObjectURL(audioResult.blob);
+        if (downloadMethod === "browser") {
+          await browser.downloads.download({ url: audioBlobUrl, filename });
+        } else {
+          const audioAnchor = document.createElement("a");
+          audioAnchor.href = audioBlobUrl;
+          audioAnchor.download = filename;
+          document.body.appendChild(audioAnchor);
+          audioAnchor.click();
+          document.body.removeChild(audioAnchor);
+        }
+        URL.revokeObjectURL(audioBlobUrl);
+        audioFiles.push(filename);
+      }
+      if (downloadedTracks.length) {
+        browser.runtime.sendMessage({
+          action: 'showSplitDownloadDialog',
+          requestId: request.requestId,
+          baseName: baseFileName,
+          videoFiles: downloadedTracks.map(track => `${baseFileName}_video${downloadedTracks.length > 1 ? getTrackSuffix(track, track.index) : ''}${track.ext}`),
+          audioFiles,
+          mpdUrl: m3u8Url,
+          downloadMethod: downloadMethod
+        });
+      }
+    }
+    browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+    handleDownloadCompletion(request.requestId);
+  } catch (e) {
+    if (isAbortError(e)) {
+      browser.runtime.sendMessage({ action: 'downloadCancelled', requestId: request.requestId });
+      await handleDownloadCompletion(request.requestId, false, true);
+      throw new Error('DOWNLOAD_CANCELLED');
+    }
+    console.error("Error during M3U8 offline download:", e);
+    browser.runtime.sendMessage({ action: 'downloadFailed', requestId: request.requestId, message: e.message || String(e) });
+    handleDownloadCompletion(request.requestId, true);
+    throw e; // Re-throw to allow popup.js to handle it as well
+  }
+}
+
+
+/*
+  * Selects a stream variant from an m3u8 manifest.
+  * If only one variant is available, it returns that variant.
+  * If multiple variants are available, it prompts the user to select one based on their preference (highest, lowest, or manual selection).
+  * @param {Array<String>} playlistLines - The lines of the m3u8 playlist.
+  * @param {String} baseUrl - The base URL for relative URIs in the playlist.
+  * @return {Promise<Object>} - A promise that resolves to the selected stream variant object containing bandwidth, resolution, and URI.
+*/
+async function selectStreamVariant(playlistLines, baseUrl, options = {}, skipCache = false) {
+  const variants = [];
+
+  function parseM3U8Attributes(line) {
+    const attrs = {};
+    const attrPart = line.includes(':') ? line.slice(line.indexOf(':') + 1) : '';
+    const regex = /([A-Z0-9-]+)=((?:"[^"]*")|[^,]*)/g;
+    let match;
+    while ((match = regex.exec(attrPart)) !== null) {
+      let value = match[2] || '';
+      if (value.startsWith('"') && value.endsWith('"')) {
+        value = value.slice(1, -1);
+      }
+      attrs[match[1]] = value;
+    }
+    return attrs;
+  }
+
+  const audioGroups = new Map();
+  for (const line of playlistLines) {
+    if (!line.startsWith('#EXT-X-MEDIA:') || !line.includes('TYPE=AUDIO')) continue;
+    const attrs = parseM3U8Attributes(line);
+    const groupId = attrs['GROUP-ID'];
+    if (!groupId) continue;
+
+    if (!audioGroups.has(groupId)) {
+      audioGroups.set(groupId, []);
+    }
+    audioGroups.get(groupId).push({
+      name: attrs.NAME || null,
+      language: attrs.LANGUAGE || null,
+      uri: attrs.URI || null,
+      bandwidth: parseInt(attrs.BANDWIDTH || '0', 10),
+      isDefault: String(attrs.DEFAULT || '').toUpperCase() === 'YES'
+    });
+  }
+
+  for (let i = 0; i < playlistLines.length; i++) {
+    if (playlistLines[i].startsWith("#EXT-X-STREAM-INF")) {
+      const attrs = parseM3U8Attributes(playlistLines[i]);
+      const bwMatch = playlistLines[i].match(/BANDWIDTH=(\d+)/);
+      const resMatch = playlistLines[i].match(/RESOLUTION=(\d+x\d+)/);
+      const bandwidth = bwMatch ? parseInt(bwMatch[1]) : 0;
+      const resolution = resMatch ? resMatch[1] : "unknown";
+      const uri = playlistLines[i + 1];
+      const audioGroupTracks = attrs.AUDIO ? (audioGroups.get(attrs.AUDIO) || []) : [];
+      const selectedAudioTrack = audioGroupTracks.find(t => t.isDefault) || audioGroupTracks[0] || null;
+      variants.push({
+        bandwidth,
+        resolution,
+        uri: new URL(uri, baseUrl).href,
+        name: attrs.NAME || null,
+        language: attrs.LANGUAGE || null,
+        audioName: selectedAudioTrack?.name || null,
+        audioLanguage: selectedAudioTrack?.language || null
+      });
+    }
+  }
+
+  // Fetch duration for each variant to estimate size
+  await Promise.all(variants.map(async (variant) => {
+    try {
+      const res = await fetchWithCache(variant.uri, options, skipCache);
+      const text = await res.text();
+      const duration = text.split('\n')
+        .filter(line => line.startsWith("#EXTINF:"))
+        .map(line => parseFloat(line.replace("#EXTINF:", "")))
+        .reduce((sum, dur) => sum + dur, 0); // total seconds
+
+      const estimatedSize = (variant.bandwidth * duration) / 8; // bytes
+      variant.estimatedSize = estimatedSize;
+      variant.duration = duration;
+    } catch (e) {
+      console.warn("Could not fetch duration for", variant.uri);
+      variant.estimatedSize = null;
+    }
+  }));
+
+  const audioTracks = Array.from(audioGroups.values()).flat().filter(track => track.uri);
+  variants.audioTracks = audioTracks;
+
+  // If there is only one selectable track, avoid prompting.
+  if (variants.length === 1 && audioTracks.length <= 1) {
+    return [
+      { ...variants[0], type: 'video' },
+      ...audioTracks.map(track => ({ ...track, type: 'audio' }))
+    ];
+  }
+
+  const preference = (await browser.storage.local.get("stream-quality").then((result) => result["stream-quality"]));
+  if (preference === "highest") return [{ ...variants.reduce((a, b) => (a.bandwidth > b.bandwidth ? a : b)), type: 'video' }];
+  if (preference === "lowest") return [{ ...variants.reduce((a, b) => (a.bandwidth < b.bandwidth ? a : b)), type: 'video' }];
+
+  const requestId = options.requestId;
+  if (!requestId) return null;
+
+  const promptUrl = options.url || baseUrl;
+  const selectedVideoResult = await requestPopupPrompt(requestId, {
+    type: 'streamVideoTracks',
+    requestId,
+    url: promptUrl,
+    variants
+  }, {
+    action: 'promptStreamVariant',
+    trackType: 'video',
+    variants,
+    requestId,
+    url: promptUrl
+  });
+
+  if (!selectedVideoResult) return null;
+
+  let selectedAudioTracks = [];
+  if (audioTracks.length > 1) {
+    const selectedAudioResult = await requestPopupPrompt(requestId, {
+      type: 'streamAudioTracks',
+      requestId,
+      url: promptUrl,
+      audioTracks
+    }, {
+      action: 'promptStreamVariant',
+      trackType: 'audio',
+      audioTracks,
+      requestId,
+      url: promptUrl
+    });
+    if (!selectedAudioResult) return null;
+    selectedAudioTracks = selectedAudioResult.selectedTracks || [];
+  } else if (audioTracks.length === 1) {
+    selectedAudioTracks = [{ ...audioTracks[0], type: 'audio' }];
+  }
+
+  return [...(selectedVideoResult.selectedTracks || []), ...selectedAudioTracks];
+}
+
+
+/**
+ * Download a DASH (.mpd) stream offline + all segments (audio + one chosen video),
+ * packaged into a ZIP so VLC can play it locally from the unzipped folder.
+ *
+ * Dependencies:
+ *   - Client-zip (https://github.com/Touffy/client-zip) must be loaded in advance.
+ *
+ * @param {String} mpdUrl
+ * @param {Array<{name:string,value:string}>} headers
+ * @param {String} downloadMethod   – (ignored here; always uses fetch)
+ * @param {Object} request          – the single request object (requests[url][selectedSizeIndex])
+ */
+async function downloadMPDOffline(mpdUrl, fileName, headers, downloadMethod, request, skipCache = false) {
+  try {
+    const abortController = registerAbortController(request.requestId, mpdUrl);
+    const signal = abortController.signal;
+    const requestHeaders = [...headers];
+    const referer = request.requestHeaders.find(h => h.name.toLowerCase() === "referer")?.value;
+    if (referer && !requestHeaders.some(h => h.name.toLowerCase() === "referer")) {
+      requestHeaders.push({ name: "Referer", value: referer });
+    }
+    const browserDownloadHeaders = requestHeaders.map(h => ({ name: h.name, value: h.value }));
+    // --- Helpers
+    function sanitizeZipPath(originalPath) {
+      if (!originalPath || typeof originalPath !== "string") return originalPath || "";
+      if (/^https?:\/\//i.test(originalPath) || /^\/\//.test(originalPath)) {
+        try {
+          const parsed = new URL(originalPath, "http://example.invalid");
+          const p = parsed.pathname.replace(/^\//, "");
+          return p || parsed.hostname;
+        } catch (e) {
+          return originalPath.replace(/^https?:\/\//i, "").replace(/[:?#]/g, "_");
+        }
+      }
+      const parts = originalPath.split("/");
+      const out = [];
+      for (let i = 0; i < parts.length; i++) {
+        const seg = parts[i];
+        if (seg === "" || seg === ".") continue;
+        else if (seg === "..") {
+          if (out.length > 0) out.pop();
+          else continue;
+        } else out.push(seg);
+      }
+      if (out.length === 0) {
+        const fallback = originalPath.split("/").filter(Boolean).slice(-1)[0] || "file";
+        return fallback.replace(/[^a-zA-Z0-9._-]/g, "_");
+      }
+      return out.join("/");
+    }
+
+    // Fetch MPD manifest
+    const manifestFetchOptions = {
+      method: request.method,
+      headers: Object.fromEntries(requestHeaders.map(h => [h.name, h.value])),
+      referrer: referer || "",
+      body: request.method !== 'GET' ? request.requestBody : null,
+      signal,
+    };
+    const resp = downloadMethod === "browser"
+      ? await fetch(mpdUrl, manifestFetchOptions)
+      : await fetchWithCache(mpdUrl, manifestFetchOptions, skipCache);
+    if (!resp.ok) throw new Error(`Failed to fetch MPD manifest: ${resp.status}.`);
+    let mpdXmlText = await resp.text();
+
+    // Parse MPD
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(mpdXmlText, "application/xml");
+    const NS = xmlDoc.documentElement.namespaceURI || "urn:mpeg:dash:schema:mpd:2011";
+
+    const hasDRM = !!xmlDoc.getElementsByTagNameNS(NS, "ContentProtection").length;
+    let drmAbort = false;
+    if (hasDRM) {
+      const promptResult = await requestPopupPrompt(request.requestId, {
+        type: 'drmWarning',
+        requestId: request.requestId,
+        url: mpdUrl
+      }, {
+        action: 'promptDRMWarning',
+        requestId: request.requestId,
+        url: mpdUrl
+      });
+
+      drmAbort = !(promptResult && promptResult.continue);
+    }
+
+    if (drmAbort) {
+      throw new Error("Download aborted by user due to DRM protection.");
+    }
+
+    // Locate Period
+    const periodList = xmlDoc.getElementsByTagNameNS(NS, "Period");
+    if (!periodList || periodList.length === 0) throw new Error("MPD has no Period entry.");
+    const period = periodList[0];
+
+    // Derive baseURL for ZIP entries
+    let baseURLNode = period.getElementsByTagNameNS(NS, "BaseURL")[0];
+    let baseURLForZip = baseURLNode ? baseURLNode.textContent.trim() : "";
+    if (baseURLForZip.match(/^https?:\/\//i)) {
+      try {
+        const u = new URL(baseURLForZip);
+        baseURLForZip = u.pathname.replace(/^\//, "");
+      } catch (e) { baseURLForZip = ""; }
+    }
+    if (baseURLForZip && !baseURLForZip.endsWith("/")) baseURLForZip += "/";
+
+    // Collect AdaptationSets
+    const allSets = Array.from(period.getElementsByTagNameNS(NS, "AdaptationSet"));
+    const adaptationSets = allSets.filter(asNode => {
+      const mimeType = asNode.getAttribute("mimeType")?.toLowerCase() || "";
+      const contentType = asNode.getAttribute("contentType")?.toLowerCase() || "";
+      if (mimeType.startsWith("audio/") || mimeType.startsWith("video/")) return true;
+      if (contentType === "audio" || contentType === "video") return true;
+      const reps = asNode.getElementsByTagNameNS(NS, "Representation");
+      for (let i = 0; i < reps.length; i++) {
+        const rm = reps[i].getAttribute("mimeType")?.toLowerCase() || "";
+        if (rm.startsWith("audio/") || rm.startsWith("video/")) return true;
+      }
+      return false;
+    });
+    if (adaptationSets.length === 0) throw new Error("MPD’s Period has no AdaptationSet for audio/video.");
+
+    // Normalize adaptation sets
+    const parsedAdaptations = adaptationSets.map(asNode => {
+      const declaredType = asNode.getAttribute("contentType");
+      let contentType;
+      if (declaredType === "video" || declaredType === "audio") contentType = declaredType;
+      else {
+        const mimeType = asNode.getAttribute("mimeType")?.toLowerCase() || "";
+        if (mimeType.startsWith("video/") || mimeType.startsWith("audio/")) contentType = mimeType.startsWith("video/") ? "video" : "audio";
+        else {
+          const reps = asNode.getElementsByTagNameNS(NS, "Representation");
+          if (reps.length > 0) {
+            const repMimeType = reps[0].getAttribute("mimeType")?.toLowerCase() || "";
+            contentType = repMimeType.startsWith("video/") ? "video" : "audio";
+          } else contentType = "video";
+        }
+      }
+
+      const setSegTmplNode = asNode.getElementsByTagNameNS(NS, "SegmentTemplate")[0];
+
+      let baseSegTmpl = null;
+      if (setSegTmplNode) {
+        baseSegTmpl = {
+          media: setSegTmplNode.getAttribute("media"),
+          initialization: setSegTmplNode.getAttribute("initialization"),
+          duration: parseInt(setSegTmplNode.getAttribute("duration") || "0", 10),
+          timescale: parseInt(setSegTmplNode.getAttribute("timescale") || "1", 10),
+          startNumber: setSegTmplNode.getAttribute("startNumber") !== null ? parseInt(setSegTmplNode.getAttribute("startNumber"), 10) : 1,
+        };
+      }
+
+      const repNodes = Array.from(asNode.getElementsByTagNameNS(NS, "Representation"));
+      if (repNodes.length === 0) throw new Error("AdaptationSet has no Representation elements.");
+
+      const adaptationLanguage =
+        asNode.getAttribute("lang") ||
+        asNode.getAttribute("language") ||
+        null;
+      const adaptationLabelNode = asNode.getElementsByTagNameNS(NS, "Label")[0];
+      const adaptationName =
+        asNode.getAttribute("label") ||
+        asNode.getAttribute("name") ||
+        adaptationLabelNode?.textContent?.trim() ||
+        null;
+
+      const representations = repNodes.map(rNode => {
+        const id = rNode.getAttribute("id");
+        const bandwidth = parseInt(rNode.getAttribute("bandwidth") || "0", 10);
+        const width = parseInt(rNode.getAttribute("width") || "0", 10);
+        const height = parseInt(rNode.getAttribute("height") || "0", 10);
+        const repLabelNode = rNode.getElementsByTagNameNS(NS, "Label")[0];
+        const name =
+          rNode.getAttribute("label") ||
+          rNode.getAttribute("name") ||
+          repLabelNode?.textContent?.trim() ||
+          adaptationName;
+        const language =
+          rNode.getAttribute("lang") ||
+          rNode.getAttribute("language") ||
+          adaptationLanguage;
+
+        const repSegTmplNode = rNode.getElementsByTagNameNS(NS, "SegmentTemplate")[0];
+        if (repSegTmplNode || setSegTmplNode) {
+          const tmplNode = repSegTmplNode || setSegTmplNode;
+          const segTmpl = {
+            media: tmplNode.getAttribute("media"),
+            initialization: tmplNode.getAttribute("initialization"),
+            duration: parseInt(tmplNode.getAttribute("duration") || (baseSegTmpl ? baseSegTmpl.duration.toString() : "0"), 10),
+            timescale: parseInt(tmplNode.getAttribute("timescale") || (baseSegTmpl ? baseSegTmpl.timescale.toString() : "1"), 10),
+            startNumber: tmplNode.getAttribute("startNumber") !== null ? parseInt(tmplNode.getAttribute("startNumber"), 10) : (baseSegTmpl ? baseSegTmpl.startNumber : 1),
+          };
+          return { id, bandwidth, width, height, name, language, type: "segmentTemplate", segmentTemplate: segTmpl };
+        }
+
+        const repSegBaseNode = rNode.getElementsByTagNameNS(NS, "SegmentBase")[0] || asNode.getElementsByTagNameNS(NS, "SegmentBase")[0];
+        if (repSegBaseNode) {
+          const initNode = repSegBaseNode.getElementsByTagNameNS(NS, "Initialization")[0];
+          const initRange = initNode ? initNode.getAttribute("range") : null;
+          const indexRange = repSegBaseNode.getAttribute("indexRange") || null;
+          const repBaseURLNode = rNode.getElementsByTagNameNS(NS, "BaseURL")[0] || asNode.getElementsByTagNameNS(NS, "BaseURL")[0];
+          const baseURLText = repBaseURLNode ? repBaseURLNode.textContent.trim() : null;
+          return { id, bandwidth, width, height, name, language, type: "segmentBase", baseURL: baseURLText, initRange, indexRange };
+        }
+
+        const repSegListNode = rNode.getElementsByTagNameNS(NS, "SegmentList")[0] || asNode.getElementsByTagNameNS(NS, "SegmentList")[0];
+        if (repSegListNode) {
+          const initNode = repSegListNode.getElementsByTagNameNS(NS, "Initialization")[0];
+          const initUrl = initNode?.getAttribute("sourceURL") || initNode?.textContent?.trim() || null;
+
+          const segNodes = Array.from(repSegListNode.getElementsByTagNameNS(NS, "SegmentURL"));
+          const segmentUrls = segNodes
+            .map(n => n.getAttribute("media"))
+            .filter(Boolean);
+
+          if (!initUrl) {
+            throw new Error("SegmentList is missing Initialization@sourceURL.");
+          }
+          if (segmentUrls.length === 0) {
+            throw new Error("SegmentList has no SegmentURL entries.");
+          }
+
+          return {
+            id,
+            bandwidth,
+            width,
+            height,
+            name,
+            language,
+            type: "segmentList",
+            initializationUrl: initUrl,
+            segmentUrls,
+          };
+        }
+
+        throw new Error("AdaptationSet missing SegmentTemplate/SegmentBase. Downloading this MPD is not supported yet.");
+      });
+
+      return { contentType, representations, node: asNode };
+    });
+
+    // find video/audio and prompt selection
+    const videoAdaptations = parsedAdaptations.filter(a => a.contentType === "video");
+    const audioAdaptations = parsedAdaptations.filter(a => a.contentType === "audio");
+
+    if (!videoAdaptations.length && !audioAdaptations.length) {
+      throw new Error("MPD has no audio or video AdaptationSet.");
+    }
+
+    const videoRepresentations = videoAdaptations.flatMap(adaptation => adaptation.representations);
+    const audioRepresentations = audioAdaptations.flatMap(adaptation => adaptation.representations);
+    const chosenVideoReps = videoRepresentations.length
+      ? await selectMPDVideoRepresentation(videoRepresentations, request.requestId, mpdUrl)
+      : [];
+    const chosenAudioReps = audioRepresentations.length
+      ? await selectMPDAudioRepresentation(audioRepresentations, request.requestId, mpdUrl)
+      : [];
+    if (chosenVideoReps === null || chosenAudioReps === null) {
+      throw new Error("Download aborted by user during MPD track selection.");
+    }
+    if (!chosenVideoReps.length && !chosenAudioReps.length) {
+      browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+      handleDownloadCompletion(request.requestId);
+      return;
+    }
+
+    const mpdBase = mpdUrl.substring(0, mpdUrl.lastIndexOf("/") + 1);
+    const mpdFilename = sanitizeFileName(fileName);
+    const baseName = mpdFilename.replace(/\.mpd$/i, "");
+
+    const isSegmentBaseOnly =
+      downloadMethod !== "browser" &&
+      (chosenVideoReps.length || chosenAudioReps.length) &&
+      chosenVideoReps.every(rep => rep.type === "segmentBase") &&
+      chosenAudioReps.every(rep => rep.type === "segmentBase");
+
+    // Unified streaming fetch with progress (single GET, no HEAD)
+    // onStart(contentLength) — called once after headers are available (contentLength may be 0 if unknown)
+    // onChunk(receivedBytes, contentLength) — called repeatedly while streaming
+    async function fetchWithProgress(url, { onStart, onChunk } = {}) {
+      const r = await fetchWithCache(url, {
+        method: request.method,
+        headers: Object.fromEntries(headers.map(h => [h.name, h.value])),
+        referrer: request.requestHeaders.find(h => h.name.toLowerCase() === "referer")?.value || "",
+        body: request.method !== 'GET' ? request.requestBody : null,
+        signal,
+      }, skipCache);
+      if (!r.ok) throw new Error(`Fetch failed: ${url} (${r.status})`);
+
+      const contentLength = Number(r.headers.get("Content-Length")) || 0;
+      if (onStart) onStart(contentLength);
+
+      if (!r.body) {
+        if (onChunk) onChunk(0, contentLength);
+        return new ArrayBuffer(0);
+      }
+
+      const reader = r.body.getReader();
+      const chunks = [];
+      let received = 0;
+      try {
+        while (true) {
+          if (signal.aborted) {
+            throw createAbortError();
+          }
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.byteLength;
+          if (onChunk) onChunk(received, contentLength);
+        }
+      } catch (err) {
+        try { reader.cancel(); } catch (e) { }
+        throw new Error(`Error reading response stream: ${err?.message || err}`);
+      }
+
+      // join chunks
+      const buffer = new Uint8Array(received);
+      let offset = 0;
+      for (const c of chunks) {
+        buffer.set(c, offset);
+        offset += c.byteLength;
+      }
+      return buffer.buffer;
+    }
+
+    // Keep ZIP inputs lazy. Buffering every segment before client-zip runs can
+    // duplicate several gigabytes of media in memory.
+    async function fetchStreamWithProgress(url, { onStart, onChunk } = {}) {
+      const response = await fetchWithCache(url, {
+        method: request.method,
+        headers: Object.fromEntries(headers.map(h => [h.name, h.value])),
+        referrer: request.requestHeaders.find(h => h.name.toLowerCase() === "referer")?.value || "",
+        body: request.method !== 'GET' ? request.requestBody : null,
+        signal,
+      }, skipCache);
+      if (!response.ok) throw new Error(`Fetch failed: ${url} (${response.status})`);
+
+      const contentLength = Number(response.headers.get("Content-Length")) || 0;
+      if (onStart) onStart(contentLength);
+      if (!response.body) return new Uint8Array(0);
+
+      const reader = response.body.getReader();
+      let received = 0;
+      return new ReadableStream({
+        async pull(controller) {
+          try {
+            if (signal.aborted) throw createAbortError();
+            const { done, value } = await reader.read();
+            if (done) {
+              controller.close();
+              return;
+            }
+            received += value.byteLength;
+            if (onChunk) onChunk(received, contentLength);
+            controller.enqueue(value);
+          } catch (error) {
+            controller.error(error);
+            try { await reader.cancel(); } catch (e) { }
+          }
+        },
+        async cancel(reason) {
+          try { await reader.cancel(reason); } catch (e) { }
+        }
+      });
+    }
+
+    // If SegmentBase-only -> download files directly (no ZIP)
+    if (isSegmentBaseOnly) {
+      const snackbar = document.createElement('mdui-snackbar');
+      snackbar.setAttribute('open', true);
+      snackbar.setAttribute('timeout', 10000);
+      snackbar.textContent = browser.i18n.getMessage("splitDownloadWarningSnackbar")
+      document.body.appendChild(snackbar);
+      snackbar.addEventListener('close', () => {
+        snackbar.remove();
+      });
+      const downloads = [];
+      chosenVideoReps.forEach(rep => downloads.push({ rep, label: "video" }));
+      chosenAudioReps.forEach(rep => downloads.push({ rep, label: "audio" }));
+      const useSplitTrackWeighting = downloads.length === 2;
+
+      // Set up byte-tracking (max will grow as we discover Content-Lengths)
+      handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: 0, total: 0 });
+      let downloadedBytes = 0;
+      let maxBytes = 0;
+      let sawUnknownLength = false;
+      let currentFileIndex = 0; // Track which file is currently being downloaded
+
+      // Helper to safely add to max
+      function addToMax(n) {
+        maxBytes += n;
+        // When using split tracking, calculate weighted percentage instead of raw byte ratio
+        if (useSplitTrackWeighting) {
+          const weightedPercentage = Math.round(((currentFileIndex + 0) / downloads.length) * 100);
+          handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: weightedPercentage });
+        } else {
+          handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes });
+        }
+      }
+
+      // For Android with fetch method, queue all downloads instead of triggering immediately
+      if (await isAndroid() && downloadMethod === 'fetch') {
+        for (let fileIndex = 0; fileIndex < downloads.length; fileIndex++) {
+          currentFileIndex = fileIndex; // Update the outer scoped variable
+          const d = downloads[fileIndex];
+          const url = new URL(d.rep.baseURL, mpdBase).href;
+          let candidate = baseName;
+          const trackSuffix = downloads.length > 1 ? `_${d.rep.name || d.rep.id || fileIndex + 1}` : '';
+          if (!candidate || candidate === "") {
+            candidate = d.label === "video" ? `${baseName}_video${trackSuffix}.mp4` : `${baseName}_audio${trackSuffix}.mp4`;
+          } else {
+            candidate += d.label === "video" ? `_video${trackSuffix}.mp4` : `_audio${trackSuffix}.mp3`;
+          }
+          const filename = candidate;
+
+          console.log(`>>> Direct download ${filename} at ${d.label}:`, url);
+
+          let lastReceivedForFile = 0;
+          const buffer = await fetchWithProgress(url, {
+            onStart: (contentLength) => {
+              if (contentLength && contentLength > 0) {
+                addToMax(contentLength);
+              } else {
+                sawUnknownLength = true;
+                handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: null, percentage: null });
+              }
+            },
+            onChunk: (received, contentLength) => {
+              const delta = received - lastReceivedForFile;
+              lastReceivedForFile = received;
+              downloadedBytes += delta;
+              if (useSplitTrackWeighting && contentLength > 0) {
+                const perTrackProgress = received / contentLength;
+                const weightedPercentage = Math.round(((currentFileIndex + perTrackProgress) / downloads.length) * 100);
+                handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes > 0 ? maxBytes : null, percentage: weightedPercentage });
+              } else {
+                const max = contentLength && contentLength > 0 ? downloadedBytes + (contentLength - received) : maxBytes;
+                if (max > 0) {
+                  handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: max, percentage: Math.round((downloadedBytes / max) * 100) });
+                }
+              }
+            }
+          });
+
+          if (useSplitTrackWeighting) {
+            const weightedPercentage = Math.round(((currentFileIndex + 1) / downloads.length) * 100);
+            handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes > 0 ? maxBytes : null, percentage: weightedPercentage });
+          }
+
+          if (sawUnknownLength) {
+            handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: Math.round((downloadedBytes / maxBytes) * 100) });
+          }
+
+          const blob = new Blob([buffer]);
+          await queueAndroidDownload(blob, filename, request.requestId);
+        }
+
+        const finalMax = sawUnknownLength ? null : maxBytes;
+        handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: finalMax, percentage: finalMax ? Math.round((downloadedBytes / finalMax) * 100) : null });
+
+        console.log("✅ Direct downloads queued for Android.");
+        if(downloads.length > 1) {
+          browser.runtime.sendMessage({ action: 'showSplitDownloadDialog', requestId: request.requestId, baseName: baseName, mpdUrl: mpdUrl, downloadMethod: downloadMethod });
+        }
+        
+        browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+        handleDownloadCompletion(request.requestId);
+        return;
+      }
+
+      for (let fileIndex = 0; fileIndex < downloads.length; fileIndex++) {
+        currentFileIndex = fileIndex; // Update the outer scoped variable
+        const d = downloads[fileIndex];
+        const url = new URL(d.rep.baseURL, mpdBase).href;
+        // Determine filename: prefer extension from baseURL, otherwise fallback
+        let candidate = baseName;
+        const trackSuffix = downloads.length > 1 ? `_${d.rep.name || d.rep.id || fileIndex + 1}` : '';
+        if (!candidate || candidate === "") {
+          candidate = d.label === "video" ? `${baseName}_video${trackSuffix}.mp4` : `${baseName}_audio${trackSuffix}.mp4`;
+        } else {
+          candidate += d.label === "video" ? `_video${trackSuffix}.mp4` : `_audio${trackSuffix}.mp3`;
+        }
+        const filename = sanitizeFileName(candidate);
+
+        console.log(`>>> Direct download ${filename} at ${d.label}:`, url);
+
+        let lastReceivedForFile = 0;
+        const buffer = await fetchWithProgress(url, {
+          onStart: (contentLength) => {
+            if (contentLength && contentLength > 0) {
+              addToMax(contentLength);
+            } else {
+              // unknown content-length — show indeterminate
+              sawUnknownLength = true;
+              handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: null, percentage: null });
+            }
+          },
+          onChunk: (received, contentLength) => {
+            const delta = received - lastReceivedForFile;
+            lastReceivedForFile = received;
+            downloadedBytes += delta;
+            if (useSplitTrackWeighting && contentLength > 0) {
+              const perTrackProgress = received / contentLength;
+              const weightedPercentage = Math.round(((currentFileIndex + perTrackProgress) / downloads.length) * 100);
+              handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes > 0 ? maxBytes : null, percentage: weightedPercentage });
+            } else {
+              // if we know any max, update value
+              const max = contentLength && contentLength > 0 ? downloadedBytes + (contentLength - received) : maxBytes;
+              if (max > 0) {
+                handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: max, percentage: Math.round((downloadedBytes / max) * 100) });
+              }
+            }
+          }
+        });
+
+        if (useSplitTrackWeighting) {
+          const weightedPercentage = Math.round(((currentFileIndex + 1) / downloads.length) * 100);
+          handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes > 0 ? maxBytes : null, percentage: weightedPercentage });
+        }
+
+        // If we had been indeterminate and now we have bytes, clear indeterminate
+        if (sawUnknownLength) {
+          // If we discovered content-length for this file earlier it would have added to max.
+          // We still remove indeterminate so the bar shows bytes progress accumulation.
+          handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: Math.round((downloadedBytes / maxBytes) * 100) });
+        }
+
+        // Trigger download for this file
+        const blob = new Blob([buffer]);
+        const objectUrl = URL.createObjectURL(blob);
+        if (downloadMethod === "browser") {
+          await browser.downloads.download({ url: objectUrl, filename: filename });
+        } else {
+          const a = document.createElement("a");
+          a.href = objectUrl;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        }
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      // Finalize progress
+      const finalMax = sawUnknownLength ? null : maxBytes;
+      handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: finalMax, percentage: finalMax ? Math.round((downloadedBytes / finalMax) * 100) : null });
+
+      console.log("✅ Direct downloads complete.");
+      if(downloads.length > 1) {
+        browser.runtime.sendMessage({ action: 'showSplitDownloadDialog', requestId: request.requestId, baseName: baseName, mpdUrl: mpdUrl, downloadMethod: downloadMethod });
+      }
+      
+      browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+      handleDownloadCompletion(request.requestId);
+      return;
+    }
+
+    // --- Otherwise: existing ZIP flow (templates + bases zipped). Keep streaming progress for all resources.
+
+    browser.runtime.sendMessage({ action: 'showMPDZipSnackbar', requestId: request.requestId });
+
+    // Build segment template helper (substituteVars reused)
+    function substituteVars(path, rep, extra = {}) {
+      return path
+        .replace(/\$RepresentationID\$/g, rep.id)
+        .replace(/\$Bandwidth\$/g, rep.bandwidth)
+        .replace(/\$Number\$/g, extra.number !== undefined ? String(extra.number) : "$Number$")
+        .replace(/\$Time\$/g, extra.time !== undefined ? String(extra.time) : "$Time$");
+    }
+
+    function buildSegmentUrlsForTemplate(rep) {
+      const tmpl = rep.segmentTemplate;
+      const baseUrl = mpdBase;
+      const initPath = substituteVars(tmpl.initialization, rep, {});
+      const initUrl = new URL(initPath, baseUrl).href;
+      const initZipPath = sanitizeZipPath(initPath);
+
+      // find template node to examine SegmentTimeline if present
+      let repNode = Array.from(xmlDoc.getElementsByTagNameNS(NS, "Representation")).find(r => r.getAttribute("id") === rep.id);
+      let tmplNode = null;
+      if (repNode) {
+        tmplNode = repNode.getElementsByTagNameNS(NS, "SegmentTemplate")[0];
+        if (!tmplNode && repNode.parentElement) tmplNode = repNode.parentElement.getElementsByTagNameNS(NS, "SegmentTemplate")[0];
+      } else tmplNode = xmlDoc.getElementsByTagNameNS(NS, "SegmentTemplate")[0];
+
+      let segmentStartTimes = null;
+      const timelineNode = tmplNode ? tmplNode.getElementsByTagNameNS(NS, "SegmentTimeline")[0] : null;
+      if (timelineNode) {
+        const sElems = Array.from(timelineNode.getElementsByTagNameNS(NS, "S"));
+        segmentStartTimes = [];
+        let cursor = null;
+        for (let i = 0; i < sElems.length; i++) {
+          const s = sElems[i];
+          const tAttr = s.getAttribute("t");
+          const dAttr = s.getAttribute("d");
+          const rAttr = s.getAttribute("r");
+          if (!dAttr) throw new Error("SegmentTimeline S element missing 'd' attribute — cannot compute segments.");
+          const d = parseInt(dAttr, 10);
+          const r = rAttr !== null ? parseInt(rAttr, 10) : 0;
+          if (tAttr !== null) cursor = parseInt(tAttr, 10);
+          else if (cursor === null) cursor = 0;
+          const repeatCount = r + 1;
+          for (let k = 0; k < repeatCount; k++) {
+            segmentStartTimes.push(cursor);
+            cursor += d;
+          }
+        }
+      }
+
+      const usesTimeVar = tmpl.media && tmpl.media.indexOf("$Time$") !== -1;
+      const mediaPaths = [];
+      const mediaZipPaths = [];
+      const segmentUrls = [];
+      const firstIndex = tmpl.startNumber ?? 1;
+
+      if (usesTimeVar) {
+        if (!segmentStartTimes) {
+          if (tmpl.duration && tmpl.duration > 0) {
+            const segLen = tmpl.duration;
+            const mpdRoot = xmlDoc.getElementsByTagNameNS(NS, "MPD")[0];
+            const totalDurationISO = mpdRoot.getAttribute("mediaPresentationDuration");
+            const parseISODuration = d => {
+              const m = /P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/.exec(d);
+              if (!m) return 0;
+              const years = parseFloat(m[1] || "0");
+              const months = parseFloat(m[2] || "0");
+              const days = parseFloat(m[3] || "0");
+              const hours = parseFloat(m[4] || "0");
+              const minutes = parseFloat(m[5] || "0");
+              const secs = parseFloat(m[6] || "0");
+              return (years * 365 * 24 * 3600 + months * 30 * 24 * 3600 + days * 24 * 3600 + hours * 3600 + minutes * 60 + secs);
+            };
+            const totalSec = parseISODuration(totalDurationISO);
+            const segLenSec = segLen / (tmpl.timescale || 1);
+            const estimatedCount = Math.ceil(totalSec / segLenSec);
+            // Build times as multiples of segLen (in timescale units)
+            segmentStartTimes = [];
+            for (let i = 0; i < estimatedCount; i++) segmentStartTimes.push(i * segLen);
+          } else {
+            throw new Error("Cannot compute $Time$ segments: SegmentTimeline missing and no fixed duration provided.");
+          }
+        }
+
+        // Build media paths by replacing $Time$ with each start time
+        for (let i = 0; i < segmentStartTimes.length; i++) {
+          const t = segmentStartTimes[i];
+          const mediaPath = substituteVars(tmpl.media, rep, { time: t, number: firstIndex + i });
+          mediaPaths.push(mediaPath);
+          mediaZipPaths.push(sanitizeZipPath(mediaPath));
+          segmentUrls.push(new URL(mediaPath, baseUrl).href);
+        }
+      } else {
+        // 1. Check if we parsed a SegmentTimeline earlier.
+        // If the MPD has a timeline, we trust it for the segment count, 
+        // even if we are using $Number$ instead of $Time$.
+        if (segmentStartTimes && segmentStartTimes.length > 0) {
+          for (let i = 0; i < segmentStartTimes.length; i++) {
+            const number = (tmpl.startNumber ?? 1) + i;
+            const mediaPath = substituteVars(tmpl.media, rep, { number });
+            mediaPaths.push(mediaPath);
+            mediaZipPaths.push(sanitizeZipPath(mediaPath));
+            segmentUrls.push(new URL(mediaPath, baseUrl).href);
+          }
+        } else {
+          // 2. Fallback: If no timeline, compute using fixed duration
+          const mpdRoot = xmlDoc.getElementsByTagNameNS(NS, "MPD")[0];
+          const totalDurationISO = mpdRoot.getAttribute("mediaPresentationDuration");
+          const parseISODuration = d => {
+            const m = /P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/.exec(d);
+            if (!m) return 0;
+            const years = parseFloat(m[1] || "0");
+            const months = parseFloat(m[2] || "0");
+            const days = parseFloat(m[3] || "0");
+            const hours = parseFloat(m[4] || "0");
+            const minutes = parseFloat(m[5] || "0");
+            const secs = parseFloat(m[6] || "0");
+            return (years * 365 * 24 * 3600 + months * 30 * 24 * 3600 + days * 24 * 3600 + hours * 3600 + minutes * 60 + secs);
+          };
+          const totalSec = parseISODuration(totalDurationISO);
+
+          // segLenSec: if tmpl.duration is 0/absent this will be 0 => guard
+          const segLenSec = (tmpl.duration || 0) / (tmpl.timescale || 1);
+          if (!segLenSec || segLenSec <= 0) throw new Error("Cannot compute number-based segments: no SegmentTimeline and duration/timescale missing or zero.");
+          const segmentCount = Math.ceil(totalSec / segLenSec);
+          for (let i = 0; i < segmentCount; i++) {
+            const number = (tmpl.startNumber ?? 1) + i;
+            const mediaPath = substituteVars(tmpl.media, rep, { number });
+            mediaPaths.push(mediaPath);
+            mediaZipPaths.push(sanitizeZipPath(mediaPath));
+            segmentUrls.push(new URL(mediaPath, baseUrl).href);
+          }
+        }
+      }
+
+      return {
+        initPath,
+        initZipPath,
+        initUrl,
+        mediaPaths,
+        mediaZipPaths,
+        segmentUrls,
+        firstIndex
+      };
+    }
+
+    // Prepare zip entries and tasks
+    const zipEntries = [];
+    zipEntries.push({ name: mpdFilename, input: new TextEncoder().encode(mpdXmlText) });
+
+    const tasks = [];
+    function queueTemplateDownloads(repObj) {
+      const info = buildSegmentUrlsForTemplate(repObj);
+      tasks.push({ type: "template", rep: repObj, info });
+    }
+    function queueBaseDownload(repObj) {
+      const baseURLText = repObj.baseURL || "";
+      const resolvedUrl = new URL(baseURLText, mpdBase).href;
+      let sanitized = sanitizeZipPath(baseURLText || "");
+      if (!sanitized) sanitized = `${baseName}_rep${repObj.id}.mp4`;
+      else if (!sanitized.match(/\.[a-zA-Z0-9]{1,6}$/)) sanitized = sanitized + `.mp4`;
+      tasks.push({ type: "base", rep: repObj, url: resolvedUrl, zipName: sanitized, baseURLText });
+    }
+    function queueListDownload(repObj) {
+      const initUrl = new URL(repObj.initializationUrl, mpdBase).href;
+      const initZipPath = sanitizeZipPath(repObj.initializationUrl);
+
+      const segmentUrls = repObj.segmentUrls.map(u => new URL(u, mpdBase).href);
+      const segmentZipPaths = repObj.segmentUrls.map(u => sanitizeZipPath(u));
+
+      tasks.push({
+        type: "list",
+        rep: repObj,
+        info: {
+          initUrl,
+          initZipPath,
+          segmentUrls,
+          segmentZipPaths,
+        }
+      });
+    }
+
+    // Queue chosen reps
+    for (const representation of [...chosenVideoReps, ...chosenAudioReps]) {
+      if (representation.type === "segmentTemplate") queueTemplateDownloads(representation);
+      else if (representation.type === "segmentBase") queueBaseDownload(representation);
+      else if (representation.type === "segmentList") queueListDownload(representation);
+      else throw new Error("Unsupported representation type");
+    }
+
+    const mpdFixEnabled = (await browser.storage.local.get("mpd-fix").then((result) => result["mpd-fix"])) === "1";
+
+    if (downloadMethod === "browser") {
+      const downloadFolder = sanitizeFileName(baseName || "media");
+      const browserRepIdToLocalName = {};
+      const browserFiles = [{ url: mpdUrl, path: `${downloadFolder}/${mpdFilename}` }];
+
+      for (const task of tasks) {
+        if (task.type === "template") {
+          browserFiles.push({ url: task.info.initUrl, path: `${downloadFolder}/${prefixedName(task.info.initZipPath)}` });
+          for (let i = 0; i < task.info.segmentUrls.length; i++) {
+            browserFiles.push({ url: task.info.segmentUrls[i], path: `${downloadFolder}/${prefixedName(task.info.mediaZipPaths[i])}` });
+          }
+          if (mpdFixEnabled) browserRepIdToLocalName[task.rep.id] = {
+            type: "template",
+            initialization: prefixedName(task.info.initZipPath),
+            media: prefixedName(sanitizeZipPath(task.rep.segmentTemplate.media))
+          };
+        } else if (task.type === "base") {
+          const localPath = prefixedName(task.zipName);
+          browserFiles.push({ url: task.url, path: `${downloadFolder}/${localPath}` });
+          if (mpdFixEnabled) browserRepIdToLocalName[task.rep.id] = localPath;
+        } else if (task.type === "list") {
+          browserFiles.push({ url: task.info.initUrl, path: `${downloadFolder}/${prefixedName(task.info.initZipPath)}` });
+          for (let i = 0; i < task.info.segmentUrls.length; i++) {
+            browserFiles.push({ url: task.info.segmentUrls[i], path: `${downloadFolder}/${prefixedName(task.info.segmentZipPaths[i])}` });
+          }
+          if (mpdFixEnabled) browserRepIdToLocalName[task.rep.id] = {
+            type: "list",
+            init: prefixedName(task.info.initZipPath),
+            segments: task.info.segmentZipPaths.map(path => prefixedName(path))
+          };
+        }
+      }
+
+      if (mpdFixEnabled) {
+        const selectedRepIds = new Set([...chosenVideoReps, ...chosenAudioReps].map(rep => rep.id));
+        pruneToSelectedRepresentations(xmlDoc, NS, selectedRepIds);
+        for (const repId in browserRepIdToLocalName) {
+          const repNode = Array.from(xmlDoc.getElementsByTagNameNS(NS, "Representation"))
+            .find(r => r.getAttribute("id") === repId);
+          if (!repNode) continue;
+          const meta = browserRepIdToLocalName[repId];
+          if (typeof meta === "string") {
+            const segmentBase = repNode.getElementsByTagNameNS(NS, "SegmentBase")[0];
+            segmentBase?.parentElement?.removeChild(segmentBase);
+            let baseNode = repNode.getElementsByTagNameNS(NS, "BaseURL")[0];
+            if (!baseNode) {
+              baseNode = xmlDoc.createElementNS(NS, "BaseURL");
+              repNode.insertBefore(baseNode, repNode.firstChild);
+            }
+            baseNode.textContent = meta;
+          } else if (meta.type === "list") {
+            const initNode = repNode.getElementsByTagNameNS(NS, "Initialization")[0];
+            if (initNode) initNode.setAttribute("sourceURL", meta.init);
+            Array.from(repNode.getElementsByTagNameNS(NS, "SegmentURL")).forEach((node, index) => {
+              if (meta.segments[index]) node.setAttribute("media", meta.segments[index]);
+            });
+          } else if (meta.type === "template") {
+            const segmentTemplate = repNode.getElementsByTagNameNS(NS, "SegmentTemplate")[0]
+              || repNode.parentElement?.getElementsByTagNameNS(NS, "SegmentTemplate")[0];
+            if (segmentTemplate) {
+              segmentTemplate.setAttribute("initialization", meta.initialization);
+              segmentTemplate.setAttribute("media", meta.media);
+            }
+          }
+        }
+        const modifiedManifest = new Blob([new XMLSerializer().serializeToString(xmlDoc)], { type: "application/dash+xml" });
+        browserFiles[0] = { blob: modifiedManifest, path: `${downloadFolder}/${mpdFilename}` };
+      }
+
+      async function downloadBrowserFile(file, index) {
+        if (signal.aborted) throw createAbortError();
+        let downloadId;
+        let settled = false;
+        let resolveDownload;
+        let rejectDownload;
+        let latestBytesReceived = 0;
+        let latestTotalBytes = 0;
+        let lastProgressUpdateAt = 0;
+        let progressTimer = null;
+        const reportProgress = (force = false) => {
+          if (latestTotalBytes <= 0 || latestBytesReceived < 0) return;
+          const now = Date.now();
+          if (!force && now - lastProgressUpdateAt < 1000) return;
+          lastProgressUpdateAt = now;
+          const fileProgress = Math.min(latestBytesReceived / latestTotalBytes, 1);
+          handleProgressUpdate({
+            action: "updateProgress",
+            requestId: request.requestId,
+            processed: index + fileProgress,
+            total: browserFiles.length,
+            percentage: ((index + fileProgress) / browserFiles.length) * 100
+          });
+        };
+        const updateFromDownloadItem = (item) => {
+          if (!item) return;
+          if (typeof item.totalBytes === "number" && item.totalBytes > 0) latestTotalBytes = item.totalBytes;
+          if (typeof item.bytesReceived === "number" && item.bytesReceived >= 0) latestBytesReceived = item.bytesReceived;
+          reportProgress(item.state === "complete");
+          if (item.state === "complete") finish(resolveDownload);
+          if (item.state === "interrupted") finish(() => rejectDownload(new Error(item.error || "Browser download interrupted.")));
+        };
+        const onChanged = (delta) => {
+          if (delta.id !== downloadId) return;
+          const totalBytes = delta.totalBytes?.current;
+          const bytesReceived = delta.bytesReceived?.current;
+          if (typeof totalBytes === "number" && totalBytes > 0) latestTotalBytes = totalBytes;
+          if (typeof bytesReceived === "number" && bytesReceived >= 0) latestBytesReceived = bytesReceived;
+          reportProgress(delta.state?.current === "complete");
+          if (delta.state?.current === "complete") finish(resolveDownload);
+          if (delta.state?.current === "interrupted") finish(() => rejectDownload(new Error(delta.error?.current || "Browser download interrupted.")));
+        };
+        const finish = (callback) => {
+          if (settled) return;
+          settled = true;
+          browser.downloads.onChanged.removeListener(onChanged);
+          if (progressTimer) {
+            clearInterval(progressTimer);
+            progressTimer = null;
+          }
+          const entry = ongoingDownloads.get(request.requestId);
+          if (entry?.downloadId === downloadId) ongoingDownloads.set(request.requestId, { ...entry, downloadId: null });
+          callback();
+        };
+
+        return new Promise((resolve, reject) => {
+          resolveDownload = resolve;
+          rejectDownload = reject;
+          const objectUrl = file.blob ? URL.createObjectURL(file.blob) : null;
+          const dlOptions = {
+            url: objectUrl || file.url,
+            filename: file.path,
+            saveAs: false
+          };
+          if (typeof browser !== 'undefined' && !navigator.userAgent.includes("Chrome")) {
+            dlOptions.headers = browserDownloadHeaders;
+            dlOptions.method = request.method;
+          }
+          browser.downloads.download(dlOptions).then(id => {
+            downloadId = id;
+            browser.downloads.onChanged.addListener(onChanged);
+            const entry = ongoingDownloads.get(request.requestId);
+            ongoingDownloads.set(request.requestId, { ...entry, downloadId });
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+
+            const pollProgress = () => {
+              browser.downloads.search({ id: downloadId })
+                .then(items => updateFromDownloadItem(items[0]))
+                .catch(error => console.warn("Could not read browser download progress:", error));
+            };
+            pollProgress();
+            progressTimer = setInterval(pollProgress, 1000);
+          }).catch(error => {
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            finish(() => reject(error));
+          });
+        });
+      }
+
+      handleProgressUpdate({ action: "updateProgress", requestId: request.requestId, processed: 0, total: browserFiles.length, percentage: 0 });
+      for (let index = 0; index < browserFiles.length; index++) {
+        await downloadBrowserFile(browserFiles[index], index);
+        handleProgressUpdate({ action: "updateProgress", requestId: request.requestId, processed: index + 1, total: browserFiles.length, percentage: ((index + 1) / browserFiles.length) * 100 });
+      }
+      browser.runtime.sendMessage({ action: "downloadComplete", requestId: request.requestId });
+      handleDownloadCompletion(request.requestId);
+      return;
+    }
+
+    // Setup progress tracking for ZIP flow
+    handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: 0, total: tasks.length, percentage: 0 });
+    let downloadedBytes = 0;
+    let maxBytes = 0;
+
+    function addToMax(n) {
+      maxBytes += n;
+      handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: Math.round((downloadedBytes / maxBytes) * 100) });
+    }
+
+    const repIdToLocalName = {};
+
+    //Calculate maxBytes for template flows (count-based)
+    for (const t of tasks) {
+      if (t.type === "template") {
+        maxBytes += 1 + t.info.segmentUrls.length; // init + segments
+      }
+    }
+
+    // Process tasks sequentially (streaming)
+    for (const t of tasks) {
+      if (signal.aborted) {
+        throw createAbortError();
+      }
+      if (t.type === "template") {
+        // init
+        console.log(">>> Fetching template init:", t.info.initUrl);
+        // Use a simple count-based progress for template flows (init + N segments)
+        // and keep totals cumulative across tasks.
+        handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: Math.round((downloadedBytes / maxBytes) * 100) });
+
+        const initBuf = await fetchStreamWithProgress(t.info.initUrl, {
+          onStart: (contentLength) => {
+            // If content-length known, account for it in maxBytes as bytes.
+            // We keep the count-based max for template flows for simplicity.
+          },
+          onChunk: (received, contentLength) => {
+            // We don't use per-byte accounting here; progress is tracked per-file.
+          }
+        });
+        zipEntries.push({ name: prefixedName(t.info.initZipPath), input: initBuf });
+        if (mpdFixEnabled) {
+          repIdToLocalName[t.rep.id] = {
+            type: "template",
+            initialization: sanitizeZipPath(t.rep.segmentTemplate.initialization),
+            media: sanitizeZipPath(t.rep.segmentTemplate.media)
+          };
+        }
+        // mark init file as processed
+        downloadedBytes += 1;
+        handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: Math.round((downloadedBytes / maxBytes) * 100) });
+
+        // segments
+        for (let i = 0; i < t.info.segmentUrls.length; i++) {
+          const segUrl = t.info.segmentUrls[i];
+          const segZipPath = t.info.mediaZipPaths[i];
+          console.log(`>>> Fetching template segment #${i + 1}:`, segUrl);
+          let lastReceived = 0;
+          const buf = await fetchStreamWithProgress(segUrl, {
+            onStart: (contentLength) => {
+              // per-segment start
+            },
+            onChunk: (received, contentLength) => {
+              // not using byte-level accounting here; finalization increments per-file counter
+            }
+          });
+          zipEntries.push({ name: prefixedName(segZipPath), input: buf });
+          downloadedBytes += 1;
+          handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: Math.round((downloadedBytes / maxBytes) * 100) });
+        }
+
+      } else if (t.type === "base") {
+        console.log(">>> Fetching SegmentBase file (single-file MP4):", t.url);
+        let lastReceivedForFile = 0;
+        const arrayBuffer = await fetchStreamWithProgress(t.url, {
+          onStart: (contentLength) => {
+            if (contentLength && contentLength > 0) addToMax(contentLength);
+            else handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: null, percentage: null });
+          },
+          onChunk: (received) => {
+            const delta = received - lastReceivedForFile;
+            lastReceivedForFile = received;
+            downloadedBytes += delta;
+            const max = maxBytes || 0
+            if (max > 0) handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: max, percentage: Math.round(((downloadedBytes) / max) * 100) });
+          }
+        });
+
+        const finalZipName = prefixedName(t.zipName);
+        zipEntries.push({ name: finalZipName, input: arrayBuffer });
+
+        if (mpdFixEnabled) repIdToLocalName[t.rep.id] = t.zipName;
+      } else if (t.type === "list") {
+        console.log(">>> Fetching SegmentList init:", t.info.initUrl);
+        let lastReceivedForFile = 0;
+        const initBuf = await fetchStreamWithProgress(t.info.initUrl, {
+          onStart: (contentLength) => {
+            if (contentLength && contentLength > 0) addToMax(contentLength);
+            else handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: null, percentage: null });
+          },
+          onChunk: (received) => {
+            const delta = received - lastReceivedForFile;
+            lastReceivedForFile = received;
+            downloadedBytes += delta;
+            const max = maxBytes || 0;
+            if (max > 0) handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: max, percentage: Math.round(((downloadedBytes) / max) * 100) });
+          }
+        });
+
+        zipEntries.push({ name: prefixedName(t.info.initZipPath), input: initBuf });
+        // SegmentList init is already accounted for in byte mode; add only segment count
+        // and keep totals cumulative across tasks.
+        maxBytes += t.info.segmentUrls.length;
+        handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: Math.round((downloadedBytes / maxBytes) * 100) });
+        for (let i = 0; i < t.info.segmentUrls.length; i++) {
+          const segUrl = t.info.segmentUrls[i];
+          const segZipPath = t.info.segmentZipPaths[i];
+
+          console.log(`>>> Fetching SegmentList segment #${i + 1}:`, segUrl);
+          let lastReceived = 0;
+          const buf = await fetchStreamWithProgress(segUrl, {
+            onStart: (contentLength) => {
+            },
+            onChunk: (received) => {
+            }
+          });
+          zipEntries.push({ name: prefixedName(segZipPath), input: buf });
+          // count-based progress increment for each segment fetched
+          downloadedBytes += 1;
+          handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: Math.round((downloadedBytes / maxBytes) * 100) });
+        }
+        if (mpdFixEnabled) repIdToLocalName[t.rep.id] = { type: "list", init: t.info.initZipPath, segments: t.info.segmentZipPaths };
+      }
+    }
+
+    // mpd-fix rewrite if needed
+    function pruneToSelectedRepresentations(xmlDoc, NS, selectedRepIds) {
+      const adaptationSets = Array.from(xmlDoc.getElementsByTagNameNS(NS, "AdaptationSet"));
+
+      for (const asNode of adaptationSets) {
+        const reps = Array.from(asNode.getElementsByTagNameNS(NS, "Representation"));
+
+        for (const rep of reps) {
+          const repId = rep.getAttribute("id");
+          if (!selectedRepIds.has(repId)) {
+            rep.parentElement?.removeChild(rep);
+          }
+        }
+
+        // Remove empty AdaptationSets
+        if (!asNode.getElementsByTagNameNS(NS, "Representation").length) {
+          asNode.parentElement?.removeChild(asNode);
+        }
+      }
+    }
+    if (mpdFixEnabled) {
+      // Build selected representations set
+      const selectedRepIds = new Set();
+      [...chosenVideoReps, ...chosenAudioReps].forEach(rep => selectedRepIds.add(rep.id));
+
+      // Remove unused representations
+      pruneToSelectedRepresentations(xmlDoc, NS, selectedRepIds);
+      for (const repId in repIdToLocalName) {
+        const repNode = Array.from(xmlDoc.getElementsByTagNameNS(NS, "Representation"))
+          .find(r => r.getAttribute("id") === repId);
+        if (!repNode) continue;
+
+        const meta = repIdToLocalName[repId];
+
+        if (typeof meta === "string") {
+          // existing SegmentBase logic
+          const segBases = Array.from(repNode.getElementsByTagNameNS(NS, "SegmentBase"));
+          segBases.forEach(n => n.parentElement && n.parentElement.removeChild(n));
+          let baseNode = repNode.getElementsByTagNameNS(NS, "BaseURL")[0];
+          if (!baseNode) {
+            baseNode = xmlDoc.createElementNS(NS, "BaseURL");
+            if (repNode.firstChild) repNode.insertBefore(baseNode, repNode.firstChild);
+            else repNode.appendChild(baseNode);
+          }
+          baseNode.textContent = meta;
+        } else if (meta?.type === "list") {
+          const initNode = repNode.getElementsByTagNameNS(NS, "Initialization")[0];
+          if (initNode) {
+            initNode.setAttribute("sourceURL", meta.init);
+          }
+
+          const segNodes = Array.from(repNode.getElementsByTagNameNS(NS, "SegmentURL"));
+          segNodes.forEach((node, idx) => {
+            if (meta.segments[idx]) {
+              node.setAttribute("media", meta.segments[idx]);
+            }
+          });
+        } else if (meta?.type === "template") {
+          const segmentTemplate = repNode.getElementsByTagNameNS(NS, "SegmentTemplate")[0]
+            || repNode.parentElement?.getElementsByTagNameNS(NS, "SegmentTemplate")[0];
+          if (segmentTemplate) {
+            if (meta.initialization) {
+              segmentTemplate.setAttribute("initialization", meta.initialization);
+            }
+            if (meta.media) {
+              segmentTemplate.setAttribute("media", meta.media);
+            }
+          }
+        }
+      }
+
+      const serializer = new XMLSerializer();
+      mpdXmlText = serializer.serializeToString(xmlDoc);
+      zipEntries[0] = { name: mpdFilename, input: new TextEncoder().encode(mpdXmlText) };
+    }
+
+    // finalize progress
+    handleProgressUpdate({ action: 'updateProgress', requestId: request.requestId, processed: downloadedBytes, total: maxBytes, percentage: maxBytes ? Math.round((downloadedBytes / maxBytes) * 100) : null });
+
+    // Generate ZIP and trigger download
+    console.log("▶️ All segments fetched; generating ZIP…");
+    const zipBlob = await downloadZip(zipEntries).blob();
+    const zipName = sanitizeFileName(`${baseName}.zip`);
+    // For Android with fetch method, queue the ZIP download instead of triggering immediately
+    if (await isAndroid() && downloadMethod === 'fetch') {
+      await queueAndroidDownload(zipBlob, zipName, request.requestId);
+      browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+      handleDownloadCompletion(request.requestId);
+      return;
+    }
+
+    if (downloadMethod === "browser") {
+      const zipUrl = URL.createObjectURL(zipBlob);
+      try {
+        await browser.downloads.download({ url: zipUrl, filename: zipName });
+      } finally {
+        URL.revokeObjectURL(zipUrl);
+      }
+    } else {
+      // Use a temporary <a> element to trigger download
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(zipBlob);
+      a.download = zipName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    }
+
+
+    browser.runtime.sendMessage({ action: 'showMPDDownloadCompleteDialog', requestId: request.requestId, baseName: baseName, mpdUrl: mpdUrl, downloadMethod: downloadMethod });
+    browser.runtime.sendMessage({ action: 'downloadComplete', requestId: request.requestId });
+    handleDownloadCompletion(request.requestId);
+
+    // Helper: prefix zip path
+    function prefixedName(path) {
+      if (!baseURLForZip) return path;
+      if (path.startsWith(baseURLForZip)) return path;
+      return baseURLForZip + path;
+    }
+  } catch (err) {
+    if (isAbortError(err)) {
+      browser.runtime.sendMessage({ action: 'downloadCancelled', requestId: request.requestId });
+      await handleDownloadCompletion(request.requestId, false, true);
+    } else {
+      console.error("Error during MPD download process:", err);
+      browser.runtime.sendMessage({ action: 'downloadFailed', requestId: request.requestId, message: err.message || String(err) });
+      handleDownloadCompletion(request.requestId, true, false);
+      throw err; // rethrow to show error popup
+    }
+  }
+}
+
+/**
+ * Helper: prompt the user to select one video Representation from an MPD’s AdaptationSet.
+ * Very similar to selectStreamVariant(...) for m3u8, but adapted to DASH.
+ *
+ * @param {Array<{ id: string, bandwidth: number, width: number, height: number }>} reps
+ *        Array of all <Representation> objects (with at least id, bandwidth, width, height).
+ * @returns {Promise<{ id: string, bandwidth: number, width: number, height: number }>}
+ *          Resolves to the chosen representation object.
+ */
+async function selectMPDVideoRepresentation(reps, requestId, url = null) {
+  // If there's only one rep, no need to ask.
+  if (reps.length === 1) {
+    return [reps[0]];
+  }
+
+  // Check saved preference
+  const preference = (await browser.storage.local.get("stream-quality").then((result) => result["stream-quality"])); // "highest" | "lowest" or "ask"
+
+  if (preference === "highest") {
+    return [reps.reduce((a, b) => (a.bandwidth > b.bandwidth ? a : b))];
+  } else if (preference === "lowest") {
+    return [reps.reduce((a, b) => (a.bandwidth < b.bandwidth ? a : b))];
+  }
+
+  const promptResult = await requestPopupPrompt(requestId, {
+    type: 'mpdVideoRepresentation',
+    requestId,
+    url,
+    reps
+  }, {
+    action: 'promptMPDVideoRepresentation',
+    reps,
+    requestId,
+    url
+  });
+
+  return promptResult?.selectedRepresentations ?? null;
+}
+
+/**
+ * Helper: prompt the user to select one audio Representation from an MPD’s AdaptationSet.
+ * Very similar to selectStreamVariant(...) for m3u8, but adapted to DASH.
+ * @param {Array<{ id: string, bandwidth: number }>} reps
+ *       Array of all <Representation> objects (with at least id, bandwidth).
+ * @returns {Promise<{ id: string, bandwidth: number }>}
+ *          Resolves to the chosen representation object.
+ */
+async function selectMPDAudioRepresentation(reps, requestId, url = null) {
+  // If there's only one rep, no need to ask.
+  if (reps.length === 1) {
+    return [reps[0]];
+  }
+
+  // Check saved preference
+  const preference = (await browser.storage.local.get("stream-quality").then((result) => result["stream-quality"])); // "highest" | "lowest" or "ask"
+
+  if (preference === "highest") {
+    return [reps.reduce((a, b) => (a.bandwidth > b.bandwidth ? a : b))];
+  } else if (preference === "lowest") {
+    return [reps.reduce((a, b) => (a.bandwidth < b.bandwidth ? a : b))];
+  }
+
+  const promptResult = await requestPopupPrompt(requestId, {
+    type: 'mpdAudioRepresentation',
+    requestId,
+    url,
+    reps
+  }, {
+    action: 'promptMPDAudioRepresentation',
+    reps,
+    requestId,
+    url
+  });
+
+  return promptResult?.selectedRepresentations ?? null;
+}
+
+function handleProgressUpdate(message) {
+  browser.runtime.sendMessage(message); // Forward to front-end to update the loading bar there as well
+  const id = message.requestId;
+  const { percentage, processed, total } = message;
+  if (!id) return;
+
+  const isFiniteNumber = (v) => typeof v === 'number' && Number.isFinite(v);
+  const clampPercent = (v) => Math.max(0, Math.min(100, Math.round(v)));
+
+  let normalizedPercentage = null;
+  if (isFiniteNumber(percentage)) {
+    normalizedPercentage = clampPercent(percentage);
+  } else if (isFiniteNumber(processed) && isFiniteNumber(total) && total > 0) {
+    normalizedPercentage = clampPercent((processed / total) * 100);
+  }
+
+  const existing = ongoingDownloads.get(id);
+  const nextEntry = {
+    requestId: id,
+    url: message.url ?? existing?.url,
+    status: 'in-progress',
+    progress: {
+      percentage: normalizedPercentage,
+      processed,
+      total
+    }
+  };
+
+  ongoingDownloads.set(id, existing ? { ...existing, ...nextEntry } : nextEntry);
+
+  // Update the extension badge with global progress percentage from all ongoing downloads
+  const downloads = Array.from(ongoingDownloads.values());
+  const totalPercentage = downloads.length
+    ? Math.round(downloads.reduce((acc, d) => acc + (d.progress?.percentage || 0), 0) / downloads.length)
+    : 0;
+  browser.action.setBadgeText({ text: totalPercentage > 0 ? `${totalPercentage}%` : '' });
+}
+
+async function handleDownloadCompletion(id, failed = false, cancelled = false) {
+
+  const existing = ongoingDownloads.get(id);
+  if (existing) {
+    // Remove from ongoing downloads
+    ongoingDownloads.delete(id);
+  }
+
+  await refreshExtensionBadge();
+
+  // Add request ID to session storage completed/failed lists.
+  // Storage values may be missing, wrapped in an object, or legacy JSON strings.
+  const toArray = (value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  const completedRaw = await browser.storage.session.get('completedDownloads');
+  const failedRaw = await browser.storage.session.get('failedDownloads');
+  const completedDownloads = toArray(completedRaw?.completedDownloads);
+  const failedDownloads = toArray(failedRaw?.failedDownloads);
+
+  // Replace existing entries instead of duplicating when a retry flips status.
+  const existingCompletedIndex = completedDownloads.indexOf(id);
+  if (existingCompletedIndex !== -1) completedDownloads.splice(existingCompletedIndex, 1);
+  const existingFailedIndex = failedDownloads.indexOf(id);
+  if (existingFailedIndex !== -1) failedDownloads.splice(existingFailedIndex, 1);
+
+  if (!cancelled) {
+    if (!failed) {
+      completedDownloads.push(id);
+    } else {
+      failedDownloads.push(id);
+    }
+  }
+
+  await browser.storage.session.set({ completedDownloads, failedDownloads });
+}
+
+browser.runtime.onMessage.addListener((message) => {
+  console.log("Received message in content script:", message);
+  switch (message.action) {
+    case 'downloadRawMedia':
+      return downloadRawMedia(message.url, message.fileName, message.headers, message.downloadMethod, message.request, message.skipCache).then(() => ({ success: true }))
+      break;
+    case 'downloadM3U8Offline':
+      return downloadM3U8Offline(message.url, message.fileName, message.headers, message.downloadMethod, message.request, message.skipCache).then(() => ({ success: true }))
+      break;
+    case 'downloadMPDOffline':
+      return downloadMPDOffline(message.url, message.fileName, message.headers, message.downloadMethod, message.request, message.skipCache).then(() => ({ success: true }))
+      break;
+    case 'getOngoingDownloads':
+      return Promise.resolve(Array.from(ongoingDownloads.values()).map(d => ({ requestId: d.requestId, url: d.url, status: d.status, progress: d.progress })));
+      break;
+    case 'cancelDownload': {
+      const entry = ongoingDownloads.get(message.requestId);
+      if (!entry) {
+        const pendingPrompt = pendingPromptResolvers.get(message.requestId);
+        if (pendingPrompt) {
+          pendingPromptResolvers.delete(message.requestId);
+          clearPendingPopupState(message.requestId).catch((error) => {
+            console.error('Failed to clear pending popup state after cancel:', error);
+          });
+          pendingPrompt.resolve(null);
+          return Promise.resolve({ cancelled: true });
+        }
+        return Promise.resolve({ cancelled: false });
+      }
+
+      if (entry.downloadId !== null && entry.downloadId !== undefined) {
+        browser.downloads.cancel(entry.downloadId).catch((error) => {
+          console.error('Failed to cancel browser download:', error);
+        });
+        // When cancellation cleanup is enabled, call browser.downloads.removeFile(entry.downloadId) here.
+      }
+
+      if (entry.abortController && !entry.abortController.signal.aborted) {
+        entry.abortController.abort();
+      }
+
+      return Promise.resolve({ cancelled: true });
+    }
+    case 'popupResolved': {
+      const pending = pendingPromptResolvers.get(message.requestId);
+      if (pending) {
+        pendingPromptResolvers.delete(message.requestId);
+        clearPendingPopupState(message.requestId).catch((error) => {
+          console.error('Failed to clear pending popup state:', error);
+        });
+        pending.resolve(message.result || null);
+      }
+      return Promise.resolve({ success: true });
+    }
+    case 'refreshBadgeState':
+      return refreshExtensionBadge().then(() => ({ success: true }));
+  }
+});

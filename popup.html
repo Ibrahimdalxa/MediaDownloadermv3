@@ -1,0 +1,576 @@
+<!--
+Copyright © 2026 🦊 helloyanis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-->
+<!DOCTYPE html>
+<html lang="en" class="mdui-theme-auto">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Media Downloader Unleashed!!</title>
+  <link rel="stylesheet" href="styles/style.css">
+  <link rel="stylesheet" href="styles/mdui.css">
+  <link rel="icon" href="icons/file_save.svg">
+</head>
+
+<body>
+  <script src="popup.js"></script>
+  <script src="translations.js"></script>
+  <script type="module" src="libraries/mdui.global.js"></script> <!-- MDUI -->
+  <script src="libraries/client-zip.js"></script> <!-- Client zip -->
+
+  <!-- tabs -->
+  <div id="content" style="display: none;">
+    <!--Rating banner-->
+    <div id="rating-banner" style="display: none;">
+      <mdui-icon id="star-icon">
+        <!-- star SVG -->
+        <svg viewBox="0 -960 960 960">
+          <path
+            d="M852-212 732-332l56-56 120 120-56 56ZM708-692l-56-56 120-120 56 56-120 120Zm-456 0L132-812l56-56 120 120-56 56ZM108-212l-56-56 120-120 56 56-120 120Zm246-75 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-361Z" />
+        </svg>
+      </mdui-icon>
+      <span id="rating-banner-text" data-translate="ratingBannerText">If you enjoy using this add-on, please take a
+        moment to rate it. Thank you very much!</span>
+      <div style="flex-grow: 1"></div>
+      <div id="rating-banner-buttons">
+        <mdui-button id="rate-now-button" variant="outlined" rel="me"
+          href="https://addons.mozilla.org/addon/media-downloader-unleashed/" target="_blank"
+          data-translate="ratingBannerRateButton">Rate now</mdui-button>
+        <mdui-dropdown>
+          <mdui-button id="dismiss-rating-banner" slot="trigger" variant="text"
+            data-translate="ratingBannerDismissButton">Dismiss</mdui-button>
+          <mdui-menu>
+            <mdui-menu-item id="dont-show-again-button">
+              <mdui-icon slot="icon">
+                <svg viewBox="0 -960 960 960">
+                  <path
+                    d="M160-200v-80h80v-280q0-33 8.5-65t25.5-61l60 60q-7 16-10.5 32.5T320-560v280h248L56-792l56-56 736 736-56 56-146-144H160Zm560-154-80-80v-126q0-66-47-113t-113-47q-26 0-50 8t-44 24l-58-58q20-16 43-28t49-18v-28q0-25 17.5-42.5T480-880q25 0 42.5 17.5T540-820v28q80 20 130 84.5T720-560v206Zm-276-50Zm36 324q-33 0-56.5-23.5T400-160h160q0 33-23.5 56.5T480-80Zm33-481Z" />
+                </svg>
+              </mdui-icon>
+              <span data-translate="ratingBannerDontShowAgainButton">Don't ask again</span>
+            </mdui-menu-item>
+            <mdui-menu-item id="remind-me-later-button">
+              <mdui-icon slot="icon">
+                <svg viewBox="0 -960 960 960">
+                  <path
+                    d="M200-640h560v-80H200v80Zm0 0v-80 80Zm0 560q-33 0-56.5-23.5T120-160v-560q0-33 23.5-56.5T200-800h40v-80h80v80h320v-80h80v80h40q33 0 56.5 23.5T840-720v227q-19-9-39-15t-41-9v-43H200v400h252q7 22 16.5 42T491-80H200Zm520 40q-83 0-141.5-58.5T520-240q0-83 58.5-141.5T720-440q83 0 141.5 58.5T920-240q0 83-58.5 141.5T720-40Zm67-105 28-28-75-75v-112h-40v128l87 87Z" />
+                </svg>
+              </mdui-icon>
+              <span data-translate="ratingBannerRemindMeLaterButton">Ask again in a week</span>
+            </mdui-menu-item>
+          </mdui-menu>
+        </mdui-dropdown>
+      </div>
+    </div>
+    <mdui-tabs id="navbar" value="home" variant="primary" full-width>
+      <mdui-tab value="home">
+        <mdui-icon slot="icon">
+          <!-- home SVG -->
+          <svg viewBox="0 -960 960 960">
+            <path
+              d="M240-200h120v-240h240v240h120v-360L480-740 240-560v360Zm-80 80v-480l320-240 320 240v480H520v-240h-80v240H160Zm320-350Z" />
+          </svg>
+        </mdui-icon>
+        <span id="home-label" data-translate="homeTab">Home</span>
+      </mdui-tab>
+      <mdui-tab value="settings">
+        <mdui-icon slot="icon">
+          <!-- settings SVG -->
+          <svg viewBox="0 -960 960 960">
+            <path
+              d="m388-80-20-126q-19-7-40-19t-37-25l-118 54-93-164 108-79q-2-9-2.5-20.5T185-480q0-9 .5-20.5T188-521L80-600l93-164 118 54q16-13 37-25t40-18l20-127h184l20 126q19 7 40.5 18.5T669-710l118-54 93 164-108 77q2 10 2.5 21.5t.5 21.5q0 10-.5 21t-2.5 21l108 78-93 164-118-54q-16 13-36.5 25.5T592-206L572-80H388Zm48-60h88l14-112q33-8 62.5-25t53.5-41l106 46 40-72-94-69q4-17 6.5-33.5T715-480q0-17-2-33.5t-7-33.5l94-69-40-72-106 46q-23-26-52-43.5T538-708l-14-112h-88l-14 112q-34 7-63.5 24T306-642l-106-46-40 72 94 69q-4 17-6.5 33.5T245-480q0 17 2.5 33.5T254-413l-94 69 40 72 106-46q24 24 53.5 41t62.5 25l14 112Zm44-210q54 0 92-38t38-92q0-54-38-92t-92-38q-54 0-92 38t-38 92q0 54 38 92t92 38Zm0-130Z" />
+          </svg>
+        </mdui-icon>
+        <span id="settings-label" data-translate="settingsTab">Settings</span>
+      </mdui-tab>
+
+      <!-- panels -->
+      <mdui-tab-panel extended slot="panel" value="home">
+        <mdui-linear-progress id="loading-media-list"></mdui-linear-progress>
+        <mdui-list id="media-list"></mdui-list>
+        <mdui-bottom-app-bar scroll-threshold="30" scroll-behavior="hide">
+          <mdui-tooltip>
+            <span slot="content" data-translate="helpTooltip">Help</span>
+            <mdui-button-icon class="bottom-button" variant="tonal"
+              href="https://github.com/helloyanis/media-downloader-unleashed/wiki/Start-using-the-add-on"
+              target="_blank">
+              <mdui-icon>
+                <svg viewBox="0 -960 960 960">
+                  <path
+                    d="M478-240q21 0 35.5-14.5T528-290q0-21-14.5-35.5T478-340q-21 0-35.5 14.5T428-290q0 21 14.5 35.5T478-240Zm-36-154h74q0-33 7.5-52t42.5-52q26-26 41-49.5t15-56.5q0-56-41-86t-97-30q-57 0-92.5 30T342-618l66 26q5-18 22.5-39t53.5-21q32 0 48 17.5t16 38.5q0 20-12 37.5T506-526q-44 39-54 59t-10 73Zm38 314q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z" />
+                </svg>
+              </mdui-icon>
+            </mdui-button-icon>
+          </mdui-tooltip>
+          <div style="flex-grow: 1"></div>
+          <div class="bottom-right">
+            <mdui-fab id="clear-list" extended>
+              <mdui-icon slot="icon">
+                <!-- clear SVG -->
+                <svg viewBox="0 -960 960 960" width="20px">
+                  <path
+                    d="M600-230v-60h145v60H600Zm0-368v-60h280v60H600Zm0 184v-60h235v60H600ZM125-675H80v-60h170v-45h135v45h170v60h-45v415q0 24-18 42t-42 18H185q-24 0-42-18t-18-42v-415Zm60 0v415h265v-415H185Zm0 0v415-415Z" />
+                </svg>
+              </mdui-icon>
+              <span id="clear-list-label" data-translate="clearListButton">Clear list</span>
+            </mdui-fab>
+            <mdui-fab id="refresh-list" extended>
+              <mdui-icon slot="icon">
+                <!-- refresh SVG -->
+                <svg viewBox="0 -960 960 960">
+                  <path
+                    d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-110h80v280H520v-80h168q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h84q-28 106-114 173t-196 67Z" />
+                </svg>
+              </mdui-icon>
+              <span id="refresh-list-label" data-translate="refreshListButton">Refresh list</span>
+            </mdui-fab>
+          </div>
+        </mdui-bottom-app-bar>
+      </mdui-tab-panel>
+
+      <mdui-tab-panel slot="panel" value="settings">
+        <script src="settings.js"></script>
+        <mdui-collapse accordion>
+          <mdui-collapse-item value="detection">
+            <mdui-list-item slot="header">
+              <mdui-icon slot="icon">
+                <svg viewBox="0 -960 960 960">
+                  <path
+                    d="M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v160H520v-160H160v480h240v80H160Zm0-80v-360 40-160 480ZM864-80 756-188q-22 13-46 20.5t-50 7.5q-75 0-127.5-52.5T480-340q0-75 52.5-127.5T660-520q75 0 127.5 52.5T840-340q0 26-7.5 50T812-244l108 108-56 56ZM731-269q29-29 29-71t-29-71q-29-29-71-29t-71 29q-29 29-29 71t29 71q29 29 71 29t71-29Z" />
+                </svg>
+              </mdui-icon>
+              <span slot="description" data-translate="settingsDetectionSectionDescription">Configure how the add-on
+                detects media files</span>
+              <span data-translate="settingsDetectionSectionTitle">Detection settings</span>
+            </mdui-list-item>
+            <div id="settings-container">
+              <!-- Detection method -->
+              <mdui-card id="detection-method" role="group" variant="filled">
+                <h3 data-translate="detectionMethodTitle">Detection method</h3>
+                <p data-translate="detectionDisabledExplain">Unchecking both options will not filter anything, showing
+                  all requests (even non-media requests!) of the
+                  browser.</p>
+                <div class="settings-switch-item">
+                  <mdui-switch id="url-detection" name="url-detection" value="url"></mdui-switch>
+                  <div class="settings-switch-description">
+                    <b data-translate="urlDetectionCheckbox">Detection via URL</b>
+                    <span class="settings-description-text" data-translate="urlDetectionExplain">Detection by checking
+                      if
+                      the URL contains a
+                      known media type (for example .mp4, .m3u8). It's fast, but some
+                      sites don't serve media through these kinds of URLs, so it might not detect everything.</span>
+                  </div>
+                </div>
+
+                <div class="settings-switch-item">
+                  <mdui-switch id="mime-detection" name="mime-detection" value="mime"></mdui-switch>
+                  <div class="settings-switch-description">
+                    <b data-translate="mimeDetectionCheckbox">Detection via the server's MIME response</b>
+                    <span class="settings-description-text" data-translate="mimeDetectionExplain">Detection by checking
+                      the
+                      server's MIME
+                      response header to see if it's a known media type (for example video/mp4,
+                      application/vnd.apple.mpegurl). It's
+                      slower than URL detection as the add-on needs to monitor every request and response, but more
+                      reliable.</span>
+                  </div>
+                </div>
+              </mdui-card>
+
+              <!-- Hide segments -->
+              <mdui-card role="group" variant="filled">
+                <h3 data-translate="hideSegmentsTitle">Hide stream segments</h3>
+
+                <div class="settings-switch-item">
+                  <mdui-switch id="hide-segments" name="hide-segments" value="1"></mdui-switch>
+                  <div class="settings-switch-description">
+                    <b data-translate="hideSegmentsCheckbox">Hide stream segments in the media list</b>
+                    <span class="settings-description-text" data-translate="hideSegmentsExplain">Live streams use
+                      multiple
+                      segments to deliver content in small
+                      parts. Usually you only need the stream manifest, so the segments can be hidden to reduce
+                      clutter.</span>
+                  </div>
+                </div>
+
+              </mdui-card>
+
+            </div>
+          </mdui-collapse-item>
+          <mdui-collapse-item value="download">
+            <mdui-list-item slot="header">
+              <mdui-icon slot="icon">
+                <svg viewBox="0 -960 960 960">
+                  <path
+                    d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z" />
+                </svg>
+              </mdui-icon>
+              <span slot="description" data-translate="settingsDownloadSectionDescription">File naming and preferences
+                for downloading streams and media</span>
+              <span data-translate="settingsDownloadSectionTitle">Download settings</span>
+            </mdui-list-item>
+            <div id="settings-container">
+
+              <!-- Download method -->
+              <mdui-card variant="filled">
+                <mdui-radio-group class="settings-radio-group" id="download-method" value="browser"
+                  name="download-method">
+                  <h3 data-translate="downloadMethodTitle">Download method</h3>
+
+                  <mdui-radio id="browser-download" value="browser" name="download-method"
+                    data-translate="browserDownloadCheckbox">Native browser
+                    download</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="browserDownloadExplain">Download the media
+                    using
+                    the browser's
+                    native download manager. Fast and handles disconnects, but only works on some sites and on some
+                    browsers (Firefox for PC).</span>
+
+                  <br />
+                  <mdui-radio id="fetch-download" value="fetch" name="download-method"
+                    data-translate="fetchDownloadCheckbox">Fetch API</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="fetchDownloadExplain">Download the media using
+                    the
+                    Fetch API.
+                    Works on most sites and browsers, but can be slower and doesn't handle disconnects well.</span>
+
+                </mdui-radio-group>
+              </mdui-card>
+
+              <!-- Media cache -->
+              <mdui-card role="group" variant="filled">
+                <h3 data-translate="mediaCacheTitle">Media cache</h3>
+
+                <div class="settings-switch-item">
+                  <mdui-switch id="media-cache" name="media-cache" value="1"></mdui-switch>
+                  <div class="settings-switch-description">
+                    <b data-translate="mediaCacheCheckbox">Enable media cache</b>
+                    <span class="settings-description-text" data-translate="mediaCacheExplain">Attempt to store the
+                      media
+                      response, so the download can occur without
+                      making a request to the server. Downloads will be faster but can slow down your browser. Disable
+                      this
+                      if
+                      you have issues with the add-on or pages freezing.</span>
+                  </div>
+                </div>
+
+              </mdui-card>
+
+              <!-- Renaming downloads -->
+              <mdui-card variant="filled">
+                <h3 data-translate="renameDownloadsTitle">Renaming downloads</h3>
+                <mdui-radio-group class="settings-radio-group" id="rename-downloads-v2" value="tab"
+                  name="rename-downloads-v2">
+                  <mdui-radio id="rename-downloads-tab" value="tab" name="rename-downloads-v2"
+                    data-translate="renameDownloadsTabNameCheckbox">Use the tab name</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="renameDownloadsTabNameExplain">Use the name of
+                    the
+                    tab to rename the downloaded file. This is usually the best option, but some sites don't set a
+                    proper
+                    name.</span>
+                  <br />
+
+                  <mdui-radio id="rename-downloads-url" value="url" name="rename-downloads-v2"
+                    data-translate="renameDownloadsUrlCheckbox">Use the last part of the URL</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="renameDownloadsUrlExplain">Use the URL of the
+                    media to rename the downloaded file. For example, https://example.com/video.mp4 would be renamed to
+                    video.mp4. This is usually not very descriptive, but it works on all sites.</span>
+                  <br />
+                  <mdui-radio id="rename-downloads-custom" value="ask" name="rename-downloads-v2"
+                    data-translate="renameDownloadsManualNameCheckbox">Enter filename manually</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="renameDownloadsManualNameExplain">A popup will
+                    appear when downloading a file, allowing you to specify a custom name for each downloaded
+                    file.</span>
+
+                </mdui-radio-group>
+
+              </mdui-card>
+
+              <!-- Stream download preference -->
+              <mdui-card variant="filled">
+                <mdui-radio-group class="settings-radio-group" id="stream-download" value="stream"
+                  name="stream-download">
+                  <h3 data-translate="streamDownloadTitle">Stream download preference</h3>
+
+
+                  <mdui-radio id="stream-file-download" value="stream" name="stream-download"
+                    data-translate="streamFileDownloadCheckbox">Download stream
+                    manifest</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="streamFileDownloadExplain">Download the stream
+                    manifest file
+                    (.m3u8, .mpd) directly. You will need a media player that supports these formats (like VLC) to view
+                    them. Lighter downloads, but you will need to be online with a working server to play the file. Some
+                    servers also block playback this way.</span>
+                  <br />
+
+                  <mdui-radio id="offline-download" value="offline" name="stream-download"
+                    data-translate="offlineDownloadChecbox">Convert to offline video
+                    file</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="offlineDownloadExplain">Convert the stream
+                    into a
+                    single
+                    offline video file (.ts or .zip) after downloading. This takes more time and storage, but the
+                    resulting
+                    file can be watched offline.</span>
+                </mdui-radio-group>
+              </mdui-card>
+
+              <!-- Stream quality -->
+              <mdui-card variant="filled">
+                <mdui-radio-group class="settings-radio-group" id="stream-quality" value="stream" name="stream-quality">
+                  <h3 data-translate="streamQualityTitle">Stream quality preference</h3>
+
+                  <mdui-radio id="ask-stream-quality" value="ask" name="ask-quality"
+                    data-translate="askStreamQualityCheckbox">Always ask me</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="askStreamQualityExplain">Always ask which
+                    quality
+                    to
+                    download when downloading a stream.</span>
+                  <br />
+
+                  <mdui-radio id="highest-stream-quality" value="highest" name="highest-quality"
+                    data-translate="highestStreamQualityCheckbox">Always highest
+                    quality</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="highestStreamQualityExplain">Always download
+                    the
+                    highest
+                    available quality for a stream. Better quality but larger files and slower downloads.</span>
+                  <br />
+
+                  <mdui-radio id="lowest-stream-quality" value="lowest" name="lowest-quality"
+                    data-translate="lowestStreamQualityCheckbox">Always lowest
+                    quality</mdui-radio>
+                  <br />
+
+                  <span class="settings-description-text" data-translate="lowestStreamQualityExplain">Always download
+                    the
+                    lowest
+                    available quality for a stream. Lower quality but smaller files and faster downloads.</span>
+                </mdui-radio-group>
+                <br />
+                <div class="settings-switch-item">
+                  <mdui-switch id="mpd-fix" name="mpd-fix" value="1"></mdui-switch>
+                  <div class="settings-switch-description">
+                    <b data-translate="mpdFixCheckbox">Fix MPD files (recommended)</b>
+                    <span class="settings-description-text" data-translate="mpdFixExplain">This will modify the .mpd
+                      file
+                      you download to only
+                      include the quality you download. Otherwise, players like VLC will not play the file because it
+                      will
+                      try
+                      to request a quality you don't have downloaded.</span>
+                  </div>
+                </div>
+              </mdui-card>
+
+              <!-- Force device type -->
+              <mdui-card variant="filled">
+                <section id="force-device-type">
+                  <h3 data-translate="deviceTypeTitle">Device type override</h3>
+                  <p data-translate="deviceTypeExplain">On Android and the Tor browser, starting downloads from the
+                    background is not supported by the browser. If downloads complete without an error and without
+                    saving a file, try forcing a different device type.</p>
+                  <mdui-radio-group class="settings-radio-group" id="force-device-type-group" value="default"
+                    name="force-device-type">
+                    <mdui-radio value="default" name="force-device-type"
+                      data-translate="deviceTypeDefaultTitle">Automatic (recommended)</mdui-radio><br />
+
+                    <span class="settings-description-text" data-translate="deviceTypeDefaultExplain">Attempt to detect
+                      your device type automatically, from your user agent.</span>
+                    <br />
+
+                    <mdui-radio value="desktop" name="force-device-type" data-translate="deviceTypeDesktopTitle">Force
+                      desktop</mdui-radio>
+                    <br />
+                    <span class="settings-description-text" data-translate="deviceTypeDesktopExplain">Always treat your
+                      browser as a desktop device. This will enable downloads in the background, but will not start any
+                      downloads on Android devices or the Tor browser.</span>
+                    <br />
+                    <mdui-radio value="android" name="force-device-type" data-translate="deviceTypeAndroidTitle">Force
+                      Android / Tor browser</mdui-radio>
+                    <br />
+                    <span class="settings-description-text" data-translate="deviceTypeAndroidExplain">Always treat your
+                      browser as an Android device. Enable this if the download appears to be completed but no file is
+                      saved. Downloads will progress in the background, but you will need to open the extension to
+                      finalize the download.</span>
+                  </mdui-radio-group>
+                </section>
+              </mdui-card>
+            </div>
+          </mdui-collapse-item>
+          <mdui-collapse-item value="interface">
+            <mdui-list-item slot="header">
+              <mdui-icon slot="icon">
+                <svg viewBox="0 -960 960 960">
+                  <path
+                    d="M480-80q-82 0-155-31.5t-127.5-86Q143-252 111.5-325T80-480q0-83 32.5-156t88-127Q256-817 330-848.5T488-880q80 0 151 27.5t124.5 76q53.5 48.5 85 115T880-518q0 115-70 176.5T640-280h-74q-9 0-12.5 5t-3.5 11q0 12 15 34.5t15 51.5q0 50-27.5 74T480-80Zm0-400Zm-177 23q17-17 17-43t-17-43q-17-17-43-17t-43 17q-17 17-17 43t17 43q17 17 43 17t43-17Zm120-160q17-17 17-43t-17-43q-17-17-43-17t-43 17q-17 17-17 43t17 43q17 17 43 17t43-17Zm200 0q17-17 17-43t-17-43q-17-17-43-17t-43 17q-17 17-17 43t17 43q17 17 43 17t43-17Zm120 160q17-17 17-43t-17-43q-17-17-43-17t-43 17q-17 17-17 43t17 43q17 17 43 17t43-17ZM480-160q9 0 14.5-5t5.5-13q0-14-15-33t-15-57q0-42 29-67t71-25h70q66 0 113-38.5T800-518q0-121-92.5-201.5T488-800q-136 0-232 93t-96 227q0 133 93.5 226.5T480-160Z" />
+                </svg>
+              </mdui-icon>
+              <span slot="description" data-translate="settingsInterfaceSectionDescription">Change the color theme and
+                how the add-on opens</span>
+              <span data-translate="settingsInterfaceSectionTitle">Interface settings</span>
+            </mdui-list-item>
+
+            <div id="settings-container">
+              <!-- Add-on opening preference -->
+              <mdui-card variant="filled">
+                <mdui-radio-group class="settings-radio-group" id="open-preference" value="tab" name="open-preference">
+                  <h3 data-translate="openPreference">Add-on opening preference</h3>
+                  <p data-translate="openPreferenceExplain">Choose how the add-on opens when you click on the icon.</p>
+                  <mdui-radio id="floating-window" value="floating" name="open-preference"
+                    data-translate="floatingWindowCheckbox">Open in a floating window</mdui-radio>
+                  <mdui-radio id="new-tab" value="tab" name="open-preference" data-translate="newTabCheckbox">Open in
+                    new
+                    tab</mdui-radio>
+
+                  <mdui-radio id="new-window" value="window" name="open-preference"
+                    data-translate="newWindowCheckbox">Open
+                    in new window</mdui-radio>
+                </mdui-radio-group>
+              </mdui-card>
+
+              <!-- Color picker -->
+              <mdui-card variant="filled">
+                <section id="color-picker">
+                  <h3 data-translate="colorPickerTitle">Interface color</h3>
+                  <input type="color" id="color-picker-input">
+                </section>
+              </mdui-card>
+
+              <mdui-card variant="filled">
+                <section id="dialog-preferences">
+                  <h3 data-translate="dialogPreferencesTitle">Reset dialog preferences</h3>
+                  <p data-translate="dialogPreferencesExplain">If you have previously chosen to not be reminded again
+                    for
+                    certain dialogs, you can reset those preferences here. This will make all reminder dialogs show up
+                    again
+                    as they did the first time you encountered them.</p>
+                  <mdui-button id="reset-dialog-preferences-button" variant="outlined"
+                    data-translate="resetDialogPreferencesButton">Reset dialog preferences</mdui-button>
+                </section>
+              </mdui-card>
+            </div>
+          </mdui-collapse-item>
+        </mdui-collapse>
+
+        <div id="settings-container">
+          <!-- Credits buttons -->
+          <mdui-card variant="filled">
+            <section id="credits">
+              <h3 data-translate="creditsTitle">Credits</h3>
+              <div style="display: flex;">
+                <a href="https://xn--3s8h30f.ws/?utm_source=media_downloader_unleashed" rel="me" target="_blank">
+                  <mdui-avatar src="icons/profile.svg" style="margin-right: 10px;"></mdui-avatar>
+                </a>
+                <p>
+                  <span data-translate="creditsDescription1">Media Downloader Unleashed!! is a </span><a
+                    href="https://github.com/helloyanis/media-downloader-unleashed" target="_blank"
+                    data-translate="creditsDescription2">free and open-source project</a><span
+                    data-translate="creditsDescription3"> made by </span><a
+                    href="https://xn--3s8h30f.ws/?utm_source=media_downloader_unleashed&utm_medium=referral" rel="me"
+                    target="_blank" data-translate="creditsDescription4">🦊 helloyanis</a><span
+                    data-translate="creditsDescription5">.</span>
+                </p>
+              </div>
+              <mdui-segmented-button-group>
+                <mdui-segmented-button variant="tonal" rel="me"
+                  href="https://addons.mozilla.org/addon/media-downloader-unleashed/" target="_blank">
+                  <mdui-icon slot="icon"><svg viewBox="0 -960 960 960">
+                      <path
+                        d="M852-212 732-332l56-56 120 120-56 56ZM708-692l-56-56 120-120 56 56-120 120Zm-456 0L132-812l56-56 120 120-56 56ZM108-212l-56-56 120-120 56 56-120 120Zm246-75 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-361Z" />
+                    </svg>
+                  </mdui-icon>
+                  <span data-translate="rateButton">Rate</span>
+                </mdui-segmented-button>
+                <mdui-segmented-button variant="tonal" id="share-button">
+                  <mdui-icon slot="icon"><svg viewBox="0 -960 960 960">
+                      <path
+                        d="M680-80q-50 0-85-35t-35-85q0-6 3-28L282-392q-16 15-37 23.5t-45 8.5q-50 0-85-35t-35-85q0-50 35-85t85-35q24 0 45 8.5t37 23.5l281-164q-2-7-2.5-13.5T560-760q0-50 35-85t85-35q50 0 85 35t35 85q0 50-35 85t-85 35q-24 0-45-8.5T598-672L317-508q2 7 2.5 13.5t.5 14.5q0 8-.5 14.5T317-452l281 164q16-15 37-23.5t45-8.5q50 0 85 35t35 85q0 50-35 85t-85 35Zm0-80q17 0 28.5-11.5T720-200q0-17-11.5-28.5T680-240q-17 0-28.5 11.5T640-200q0 17 11.5 28.5T680-160ZM200-440q17 0 28.5-11.5T240-480q0-17-11.5-28.5T200-520q-17 0-28.5 11.5T160-480q0 17 11.5 28.5T200-440Zm480-280q17 0 28.5-11.5T720-760q0-17-11.5-28.5T680-800q-17 0-28.5 11.5T640-760q0 17 11.5 28.5T680-720Zm0 520ZM200-480Zm480-280Z" />
+                    </svg>
+                  </mdui-icon>
+                  <span data-translate="shareButton">Share</span>
+                </mdui-segmented-button>
+                <mdui-segmented-button variant="tonal" rel="me" href="https://ko-fi.com/helloyanis" target="_blank">
+                  <mdui-icon slot="icon"><svg viewBox="0 -960 960 960">
+                      <path
+                        d="M640-440 474-602q-31-30-52.5-66.5T400-748q0-55 38.5-93.5T532-880q32 0 60 13.5t48 36.5q20-23 48-36.5t60-13.5q55 0 93.5 38.5T880-748q0 43-21 79.5T807-602L640-440Zm0-112 109-107q19-19 35-40.5t16-48.5q0-22-15-37t-37-15q-14 0-26.5 5.5T700-778l-60 72-60-72q-9-11-21.5-16.5T532-800q-22 0-37 15t-15 37q0 27 16 48.5t35 40.5l109 107ZM280-220l278 76 238-74q-5-9-14.5-15.5T760-240H558q-27 0-43-2t-33-8l-93-31 22-78 81 27q17 5 40 8t68 4q0-11-6.5-21T578-354l-234-86h-64v220ZM40-80v-440h304q7 0 14 1.5t13 3.5l235 87q33 12 53.5 42t20.5 66h80q50 0 85 33t35 87v40L560-60l-280-78v58H40Zm80-80h80v-280h-80v280Zm520-546Z" />
+                    </svg>
+                  </mdui-icon>
+                  <span data-translate="donateButton">Donate</span>
+                </mdui-segmented-button>
+              </mdui-segmented-button-group>
+              <h3 data-translate="contactTitle">Contact me</h3>
+              <p data-translate="contactDescription">If you have any questions, suggestions or issues, feel free to
+                contact me!</p>
+              <mdui-segmented-button-group>
+                <mdui-segmented-button variant="tonal" rel="me" href="mailto:mediadownloaderunleashed@xn--3s8h30f.ws">
+                  <mdui-icon slot="icon"><svg viewBox="0 -960 960 960">
+                      <path
+                        d="M480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480v58q0 59-40.5 100.5T740-280q-35 0-66-15t-52-43q-29 29-65.5 43.5T480-280q-83 0-141.5-58.5T280-480q0-83 58.5-141.5T480-680q83 0 141.5 58.5T680-480v58q0 26 17 44t43 18q26 0 43-18t17-44v-58q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93h200v80H480Zm0-280q50 0 85-35t35-85q0-50-35-85t-85-35q-50 0-85 35t-35 85q0 50 35 85t85 35Z" />
+                    </svg>
+                  </mdui-icon>
+                  <span data-translate="emailButton">E-mail</span>
+                </mdui-segmented-button>
+                <mdui-segmented-button variant="tonal" rel="me" href="https://furries.club/@helloyanis" target="_blank">
+                  <mdui-icon slot="icon"><svg role="img" viewBox="0 0 24 24">
+                      <path
+                        d="M23.268 5.313c-.35-2.578-2.617-4.61-5.304-5.004C17.51.242 15.792 0 11.813 0h-.03c-3.98 0-4.835.242-5.288.309C3.882.692 1.496 2.518.917 5.127.64 6.412.61 7.837.661 9.143c.074 1.874.088 3.745.26 5.611.118 1.24.325 2.47.62 3.68.55 2.237 2.777 4.098 4.96 4.857 2.336.792 4.849.923 7.256.38.265-.061.527-.132.786-.213.585-.184 1.27-.39 1.774-.753a.057.057 0 0 0 .023-.043v-1.809a.052.052 0 0 0-.02-.041.053.053 0 0 0-.046-.01 20.282 20.282 0 0 1-4.709.545c-2.73 0-3.463-1.284-3.674-1.818a5.593 5.593 0 0 1-.319-1.433.053.053 0 0 1 .066-.054c1.517.363 3.072.546 4.632.546.376 0 .75 0 1.125-.01 1.57-.044 3.224-.124 4.768-.422.038-.008.077-.015.11-.024 2.435-.464 4.753-1.92 4.989-5.604.008-.145.03-1.52.03-1.67.002-.512.167-3.63-.024-5.545zm-3.748 9.195h-2.561V8.29c0-1.309-.55-1.976-1.67-1.976-1.23 0-1.846.79-1.846 2.35v3.403h-2.546V8.663c0-1.56-.617-2.35-1.848-2.35-1.112 0-1.668.668-1.67 1.977v6.218H4.822V8.102c0-1.31.337-2.35 1.011-3.12.696-.77 1.608-1.164 2.74-1.164 1.311 0 2.302.5 2.962 1.498l.638 1.06.638-1.06c.66-.999 1.65-1.498 2.96-1.498 1.13 0 2.043.395 2.74 1.164.675.77 1.012 1.81 1.012 3.12z" />
+                    </svg>
+                  </mdui-icon>
+                  <span data-translate="mastodonButton">Mastodon</span>
+                </mdui-segmented-button>
+              </mdui-segmented-button-group>
+            </section>
+
+            <mdui-snackbar closeable class="mobile-incompatible-warning" data-translate="mobileIncompatibleWarning">⚠️
+              This option is not compatible for some
+              browsers, like Firefox for Android. If you are using this browser, then change the option
+              back.</mdui-snackbar>
+        </div>
+      </mdui-tab-panel>
+    </mdui-tabs>
+  </div>
+  <div id="loading">
+    <mdui-circular-progress></mdui-circular-progress>
+    <h1>Now loading...</h1>
+    <p>You should not see this screen for more than a few seconds. If you are stuck here, check the following :</p>
+    <ul>
+      <li>JavaScript should be enabled, and not blocked by script blockers (like noScript, uBlock origin...)</li>
+      <li>If you are in private browsing mode, you should allow the extension to run in private windows from your
+        browser's settings.</li>
+      <li>Your browser isn't modified and breaks the extension. Try on Firefox for PC.</li>
+      <li>Uninstall and reinstall the extension</li>
+      <li>Open the browser console with CTRL+SHIFT+I and check for any errors.</li>
+    </ul>
+    <p>If you are still stuck, feel free to <a href="mailto:mediadownloaderunleashed@xn--3s8h30f.ws">send me an
+        email</a> !</p>
+  </div>
+</body>
+
+</html>

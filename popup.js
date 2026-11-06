@@ -1,0 +1,2089 @@
+/*
+Media Downloader Unleashed!! - https://github.com/helloyanis/media-downloader-unleashed/
+
+Copyright © 2026 🦊 helloyanis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
+// Check for the existence of the browser object and use chrome if not found
+if (typeof browser === 'undefined') {
+  var browser = chrome;
+}
+
+let ratingCount = 0;
+sessionStorage.setItem('shownYoutubeAlert', 0); //To prevent multiple youtube alerts in the same session
+let pendingPopupState = null; // Track if a popup is currently open
+let isPopupClosing = false; // Track if the popup is closing
+
+// Keep in-memory pending popup state synchronized across multiple popup tabs.
+// This prevents a stale tab from re-saving a resolved popup state on close.
+browser.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'session' || !changes.pendingPopupState) {
+    return;
+  }
+
+  const newPendingState = changes.pendingPopupState.newValue || null;
+  const oldPendingState = changes.pendingPopupState.oldValue || null;
+
+  if (!newPendingState) {
+    if (!pendingPopupState) {
+      return;
+    }
+    // Only clear local state if it corresponds to the same pending request
+    // that was removed from session storage.
+    if (!oldPendingState || pendingPopupState.requestId === oldPendingState.requestId) {
+      pendingPopupState = null;
+    }
+    return;
+  }
+
+  pendingPopupState = newPendingState;
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  initializeDialogPreferences();
+
+  // Check for queued Android downloads and trigger them
+  triggerQueuedAndroidDownloadsIfAny();
+
+  // Check for pending popups that were blocked by the popup page being closed
+  restorePendingPopupIfExists();
+
+  loadMediaList();
+  document.getElementById('navbar').addEventListener('change', (event) => {
+    console.log(event)
+    const selectedTabIndex = document.getElementById('navbar').activeTabIndex;
+    document.querySelectorAll('.tab-content').forEach((tabContent, index) => {
+      tabContent.style.display = index === selectedTabIndex ? 'block' : 'none';
+    });
+  });
+
+  document.getElementById('refresh-list').addEventListener('click', (event) => {
+    loadMediaList();
+  });
+  document.getElementById('clear-list').addEventListener('click', (event) => {
+    // Todo : Add a confirmation dialog before clearing the list
+    clearMediaList();
+  });
+
+  checkAndShowRatingBanner()
+  document.getElementById('dont-show-again-button').addEventListener('click', (event) => {
+    dismissRatingBanner();
+  });
+
+  // Remind me later button
+  document.getElementById('remind-me-later-button').addEventListener('click', async (event) => {
+    const ratingBanner = document.getElementById('rating-banner');
+    ratingBanner.style.display = 'none';
+    // Reset install date to now so we remind in 7 days
+    const todayStr = (typeof Temporal !== 'undefined') ? Temporal.Now.plainDateISO().toString() : new Date().toISOString().split('T')[0];
+    await browser.storage.local.set({ 'install-date': todayStr });
+  });
+
+  document.getElementById('rate-now-button').addEventListener('click', async (event) => {
+    try {
+      res = await fetch("https://addons.mozilla.org/api/v5/addons/addon/media-downloader-unleashed/");
+      data = await res.json();
+      ratingCount = data?.ratings?.count || 0;
+      await browser.storage.local.set({ 'ratings-at-attempt': ratingCount.toString() });
+      onfocus = async () => {
+        try {
+          res = await fetch("https://addons.mozilla.org/api/v5/addons/addon/media-downloader-unleashed/");
+          data = await res.json();
+          const newRatingCount = data?.ratings?.count || 0;
+          if (newRatingCount > ratingCount) {
+            dismissRatingBanner();
+          }
+        } catch (e) {}
+        await browser.storage.local.remove("ratings-at-attempt");
+        onfocus = null;
+      };
+    } catch (e) {
+      console.warn("Could not fetch rating count:", e);
+    }
+  });
+
+  // Check if the options page is requested
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('options') === 'true') {
+    document.querySelectorAll('mdui-tab')[1].click(); //Click on the options tab
+  }
+
+  // Track when the popup is about to close
+  window.addEventListener('beforeunload', () => {
+    isPopupClosing = true;
+    if (pendingPopupState) {
+      // Save the pending popup state before closing
+      browser.storage.session.set({ pendingPopupState });
+      browser.action.setBadgeText({ text: '!' });
+      browser.action.setBadgeBackgroundColor({ color: '#FF9800' });
+    }
+  });
+
+});
+
+// Helper: show settings tab and highlight a section
+function showSettingsSection(selector, settingsSection) {
+  try {
+    const tabs = document.querySelectorAll('mdui-tab');
+    if (tabs && tabs[1]) tabs[1].click(); // switch to settings tab
+    // Open the specified settings section if provided
+    if (settingsSection) {
+      const sectionElement = document.querySelector(`mdui-collapse-item[value="${settingsSection}"]`);
+      const collapse = document.querySelectorAll('mdui-collapse');
+      const currentValue = collapse[0].value;
+      let shouldWaitForOpenEvent = false;
+      if(currentValue !== settingsSection) shouldWaitForOpenEvent = true;
+      collapse[0].value = settingsSection;
+      if (shouldWaitForOpenEvent) {
+        // Wait for the opened event to fire and then scroll to the section
+        sectionElement.addEventListener('opened', () => {
+          const el = document.querySelector(selector);
+          if (!el) return;
+          const target = el.parentElement || el;
+          target.classList.add('highlighted');
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          setTimeout(() => target.classList.remove('highlighted'), 4000);
+        });
+      } else {
+        // Wait a tick for tab content to become visible then scroll
+        setTimeout(() => {
+          const el = document.querySelector(selector);
+          if (!el) return;
+          const target = el.parentElement || el;
+          target.classList.add('highlighted');
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          setTimeout(() => target.classList.remove('highlighted'), 4000);
+        }, 100);
+      }
+    }
+  } catch (e) {
+    console.warn('Could not open settings section', selector, e);
+  }
+}
+
+/**
+ * Trigger queued Android downloads if any exist
+ */
+async function triggerQueuedAndroidDownloadsIfAny() {
+  try {
+    const queuedDownloads = await browser.storage.session.get('queuedAndroidDownloads').then(r => r.queuedAndroidDownloads || []);
+    if (queuedDownloads.length > 0) {
+      console.log(`Triggering ${queuedDownloads.length} queued Android downloads`);
+      for (const download of queuedDownloads) {
+        const a = document.createElement("a");
+        a.href = download.blobUrl;
+        a.download = download.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Small delay to avoid browser blocking multiple downloads at once
+        await new Promise(resolve => setTimeout(resolve, 100));
+        URL.revokeObjectURL(download.blobUrl); // Revoke the blob URL after triggering the download
+      }
+      await browser.storage.session.set({ queuedAndroidDownloads: [] });
+      await browser.runtime.sendMessage({ action: 'refreshBadgeState' });
+    }
+  } catch (error) {
+    console.error('Error triggering queued Android downloads:', error);
+  }
+}
+
+/**
+ * Restore pending popup if it was blocked by the popup page being closed
+ */
+async function restorePendingPopupIfExists() {
+  try {
+    const stored = await browser.storage.session.get('pendingPopupState').then(r => r.pendingPopupState);
+    if (stored) {
+      console.log('Restoring pending popup:', stored);
+      
+      // Restore and display the pending popup based on its type
+      if (stored.type === 'streamVideoTracks' || stored.type === 'streamAudioTracks') {
+        await promptStreamVariant(stored.variants || [], stored.url, stored.requestId, stored.audioTracks || [], stored.type === 'streamAudioTracks' ? 'audio' : 'video');
+      } else if (stored.type === 'drmWarning') {
+        await promptDRMWarning(stored.requestId);
+      } else if (stored.type === 'mpdVideoRepresentation') {
+        await promptMPDVideoRepresentation(stored.reps, "video", stored.requestId);
+      } else if (stored.type === 'mpdAudioRepresentation') {
+        await promptMPDVideoRepresentation(stored.reps, "audio", stored.requestId);
+      }
+    }
+  } catch (error) {
+    console.error('Error restoring pending popup:', error);
+  }
+}
+
+// Check if we should show the rating banner
+async function checkAndShowRatingBanner() {
+  try {
+    const stored = await browser.storage.local.get(['install-date', 'has-rated', 'ratings-at-attempt']);
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (!stored['install-date']) {
+      await browser.storage.local.set({ 'install-date': todayStr });
+      return;
+    }
+
+    if (stored['has-rated']) return;
+
+    const installTime = new Date(stored['install-date']).getTime();
+    const daysSinceInstall = (Date.now() - installTime) / (1000 * 60 * 60 * 24);
+
+    if (daysSinceInstall >= 7) {
+      if (stored['ratings-at-attempt']) {
+        try {
+          const res = await fetch("https://addons.mozilla.org/api/v5/addons/addon/media-downloader-unleashed/");
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.ratings?.count > parseInt(stored['ratings-at-attempt'], 10)) {
+              return dismissRatingBanner();
+            }
+          }
+        } catch (e) {}
+      }
+      const ratingBanner = document.getElementById('rating-banner');
+      if (ratingBanner) ratingBanner.removeAttribute("style");
+    }
+  } catch (e) {
+    console.warn('Rating banner check skipped:', e);
+  }
+}
+
+// Dismiss the rating banner
+async function dismissRatingBanner() {
+  const ratingBanner = document.getElementById('rating-banner');
+  ratingBanner.style.display = 'none';
+  await browser.storage.local.set({ 'has-rated': 'true' });
+}
+
+/**
+ * Show a dialog with a message and an optional title.
+ * This function creates a dialog element, adds a title and message to it, and provides buttons for reporting an issue or closing the dialog. Used when an error occurs or when the user needs to be informed about something.
+ * @param {String} message The message to display in the dialog
+ * @param {String} [title=null] The title of the dialog, if not provided a random error title will be used
+ * @returns {void} Does not return anything, but creates a dialog element in the DOM
+*/
+function showDialog(message, title = null, errorData = null) {
+  const dialog = document.createElement('mdui-dialog');;
+  //Add the title to the dialog
+  const titleElement = document.createElement('div');
+  titleElement.setAttribute('slot', 'headline');
+  errorTitles = [browser.i18n.getMessage("errorTitle1"), browser.i18n.getMessage("errorTitle2"), browser.i18n.getMessage("errorTitle3"), browser.i18n.getMessage("errorTitle4"), browser.i18n.getMessage("errorTitle5"), browser.i18n.getMessage("errorTitle6")];
+  if (title) {
+    titleElement.textContent = title;
+  } else {
+    titleElement.textContent = errorTitles[~~(Math.random() * errorTitles.length)];
+  }
+
+  dialog.appendChild(titleElement);
+
+  //Add the message to the dialog
+  const messageElement = document.createElement('div');
+  messageElement.setAttribute('slot', 'description');
+  messageElement.innerHTML = message;
+  dialog.appendChild(messageElement);
+
+  //Add an buttons to the dialog
+  const reportButton = document.createElement('mdui-button');
+  reportButton.variant = "text"
+  reportButton.textContent = browser.i18n.getMessage("reportIssue");
+  reportButton.slot = 'action';
+  reportButton.addEventListener('click', async () => {
+    reportButton.disabled = true;
+    if (!await shareDiagnosticData(errorData)) reportButton.disabled = false;
+  });
+  dialog.appendChild(reportButton);
+
+  const okButton = document.createElement('mdui-button');
+  okButton.variant = "text"
+  okButton.textContent = browser.i18n.getMessage("okButton");
+  okButton.slot = 'action';
+  okButton.addEventListener('click', () => {
+    dialog.removeAttribute('open');
+  });
+  dialog.appendChild(okButton);
+
+  document.body.appendChild(dialog);
+  dialog.setAttribute('open', true)
+}
+
+async function getDialogPreference(preferenceKey) {
+  const result = await browser.storage.local.get(preferenceKey);
+  return result[preferenceKey] ?? '0';
+}
+
+async function setDialogPreference(preferenceKey, value) {
+  await browser.storage.local.set({ [preferenceKey]: String(value) });
+}
+
+async function initializeDialogPreferences() {
+  const storedPreferences = await browser.storage.local.get(Object.values(dialogPreferenceKeys));
+  const missingPreferences = {};
+
+  for (const preferenceKey of Object.values(dialogPreferenceKeys)) {
+    if (storedPreferences[preferenceKey] === undefined) {
+      missingPreferences[preferenceKey] = '0';
+    }
+  }
+
+  if (Object.keys(missingPreferences).length > 0) {
+    await browser.storage.local.set(missingPreferences);
+  }
+}
+
+async function showDontRemindMeSnackbar(message, preferenceKey) {
+  mdui.snackbar({
+    message,
+    action: browser.i18n.getMessage("dontRemindMeSnackbarAction"),
+    closeable: true,
+    autoCloseDelay: 10000,
+    onActionClick: async () => {
+      await setDialogPreference(preferenceKey, '2');
+    }
+  });
+}
+
+async function showPreferenceAwareCompletionNotice({ preferenceKey, headline, description }) {
+  const preferenceValue = await getDialogPreference(preferenceKey);
+
+  if (preferenceValue === '2') {
+    return;
+  }
+
+  if (preferenceValue === '1') {
+    await showDontRemindMeSnackbar(headline, preferenceKey);
+    return;
+  }
+
+  await showDialogCustom({
+    headline,
+    description,
+    confirmText: browser.i18n.getMessage("okButton"),
+    showTextField: false,
+    showCheckbox: true,
+    showCancelButton: false,
+    checkboxLabel: browser.i18n.getMessage("dontRemindMeCheckbox"),
+    onConfirm: async (checked) => {
+      if (checked) {
+        await setDialogPreference(preferenceKey, '1');
+      }
+    },
+  });
+}
+
+/**
+ * Show a customizable dialog with options for headline, description, confirm and cancel buttons, and an optional text field. This function is used to ask the user for input or confirmation before performing an action.
+ * @param {Object} options An object containing the options for the dialog
+ */
+async function showDialogCustom({
+  headline = "",
+  description = "",
+  confirmText = "OK",
+  cancelText = "Cancel",
+  onConfirm = () => { },
+  onCancel = () => { },
+  showTextField = true,
+  showCheckbox = false,
+  checkboxLabel = "",
+  showCancelButton = true,
+  textFieldOptions = {}
+}) {
+  return new Promise((resolve) => {
+
+    const dialog = document.createElement("mdui-dialog");
+
+    // ----- Headline -----
+    const headlineElement = document.createElement("div");
+    headlineElement.setAttribute("slot", "headline");
+    headlineElement.textContent = headline;
+    dialog.appendChild(headlineElement);
+
+    // ----- Body ------
+    const dialogBodyElement = document.createElement("div");
+    dialogBodyElement.style.display = "flex";
+    dialogBodyElement.style.flexDirection = "column";
+    dialogBodyElement.style.gap = "12px";
+    dialog.appendChild(dialogBodyElement);
+
+    // ----- Description -----
+    const descriptionElement = document.createElement("div");
+    descriptionElement.setAttribute("slot", "description");
+    descriptionElement.innerHTML = description;
+    dialogBodyElement.appendChild(descriptionElement);
+
+    // ----- Text Field -----
+    const textField = document.createElement("mdui-text-field");
+    textField.setAttribute("slot", "description");
+
+    for (const [key, val] of Object.entries(textFieldOptions)) {
+      if (val !== undefined && val !== null) {
+        textField.setAttribute(key, val);
+      }
+    }
+    if (showTextField) {
+      dialogBodyElement.appendChild(textField);
+    }
+
+    const checkbox = document.createElement("mdui-checkbox");
+    checkbox.id = `dialog-checkbox-${Math.random().toString(36).slice(2)}`;
+    checkbox.innerText = checkboxLabel;
+
+    if (showCheckbox) {
+      dialogBodyElement.appendChild(checkbox);
+    }
+
+    // ----- Cancel Button -----
+    if (showCancelButton) {
+      const cancelBtn = document.createElement("mdui-button");
+      cancelBtn.variant = "text";
+      cancelBtn.slot = "action";
+      cancelBtn.textContent = cancelText;
+      cancelBtn.addEventListener("click", async () => {
+        dialog.removeAttribute("open");
+        await onCancel();
+        resolve(false);
+      });
+      dialog.appendChild(cancelBtn);
+    }
+
+    // ----- Confirm Button -----
+    const confirmBtn = document.createElement("mdui-button");
+    confirmBtn.variant = "text";
+    confirmBtn.slot = "action";
+    confirmBtn.textContent = confirmText;
+    confirmBtn.addEventListener("click", async () => {
+      dialog.removeAttribute("open");
+      if (showTextField) {
+        const value = textField.value;
+        await onConfirm(value, showCheckbox ? checkbox.checked : undefined);
+
+      } else {
+        await onConfirm(showCheckbox ? checkbox.checked : undefined);
+      }
+      resolve(true);
+    });
+    dialog.appendChild(confirmBtn);
+
+    // Show dialog
+    document.body.appendChild(dialog);
+    dialog.setAttribute("open", true);
+  });
+}
+
+
+async function shareDiagnosticData(errorData) {
+  console.log("Sharing diagnostic data:", errorData);
+
+  window.open(`https://docs.google.com/forms/d/e/1FAIpQLSdXpVKZaJm-Yk6DmnkFZHxPLRH4xK51uk7NeioKJ8CxZbxXVA/viewform`);
+
+  // For some reason the Mozilla Add-on review team doesn't allow me to pre-fill the form, even though it's just to make it easier for users to report issues and doesn't force them to share any data they don't want to share. As per their e-mail :
+  // > "As your extension is compatible with Firefox 139 and earlier a custom data collection collection and transmission consent screen is required in order to be compliant."
+  // Even though It looked like I was already compliant? See https://furries.club/system/media_attachments/files/116/052/458/698/436/290/original/bab638f0f729bf0a.png for a screenshot.
+  // Anyways now sharing error data has become a chore but hopefully this should at least make the add-on be re-listed on the store.
+
+  // Below, the ideal solution which prefills the form :
+  // let mediaRequests = await browser.runtime.sendMessage({ action: 'getMediaRequests' });
+  // window.open(`https://docs.google.com/forms/d/e/1FAIpQLSdXpVKZaJm-Yk6DmnkFZHxPLRH4xK51uk7NeioKJ8CxZbxXVA/viewform?usp=pp_url&entry.1792028239=${encodeURIComponent(errorData.error || 'N/A')}&entry.1527093375=${encodeURIComponent(errorData.url || 'N/A')}&entry.713772415=${encodeURIComponent(mediaRequests[errorData.url]?.[0]?.requestHeaders.find(h => h.name.toLowerCase() === "referer")?.value || 'N/A')}&entry.582473750=${encodeURIComponent(navigator.userAgent)}}`, '_blank');
+}
+
+/**
+ * Normalizes a value to an array of session IDs.
+ * @param {*} value The value to normalize.
+ * @returns {string[]} An array of session IDs.
+ */
+function normalizeSessionList(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  return [];
+}
+
+const CACHE_DB_NAME = 'MediaCacheDB';
+const CACHE_STORE_NAME = 'network-cache';
+
+function openCacheDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(CACHE_DB_NAME, 1);
+    request.onerror = (event) => reject(event.target.error || 'IDB Open Error');
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(CACHE_STORE_NAME)) {
+        db.createObjectStore(CACHE_STORE_NAME, { keyPath: 'url' });
+      }
+    };
+    request.onsuccess = (event) => resolve(event.target.result);
+  });
+}
+
+function getHeaderValue(headers, headerName) {
+  if (!Array.isArray(headers)) return '';
+  const lowerHeaderName = headerName.toLowerCase();
+  return headers.find((header) => header.name.toLowerCase() === lowerHeaderName)?.value || '';
+}
+
+function normalizeUrlForComparison(url) {
+  try {
+    const parsedUrl = new URL(url);
+    return `${parsedUrl.origin}${parsedUrl.pathname}`.toLowerCase();
+  } catch (error) {
+    return String(url || '').split('#')[0].split('?')[0].toLowerCase();
+  }
+}
+
+function normalizeContentType(value) {
+  return String(value || '').toLowerCase().replace(/[^a-zA-Z]/g, '');
+}
+
+function isManifestRequest(url, request) {
+  const pathname = new URL(url).pathname.toLowerCase();
+  const contentType = normalizeContentType(getHeaderValue(request?.responseHeaders, 'content-type'));
+
+  return pathname.endsWith('.m3u8') ||
+    pathname.endsWith('.mpd') ||
+    contentType.includes('applicationxmpegurl') ||
+    contentType.includes('applicationvndapplempegurl') ||
+    contentType.includes('applicationdashxml');
+}
+
+// Read the cached response body for a manifest URL from IndexedDB. This is used to extract segment URLs for DASH and HLS streams, as the manifest file contains the list of segments to download.
+async function readCachedManifestText(url) {
+
+  try {
+    const db = await openCacheDB();
+    const cachedItem = await new Promise((resolve, reject) => {
+      const tx = db.transaction([CACHE_STORE_NAME], 'readonly');
+      const store = tx.objectStore(CACHE_STORE_NAME);
+      const req = store.get(url);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+    if (!cachedItem?.data) return null;
+    return await cachedItem.data.text();
+  } catch (error) {
+    console.warn('Failed to read cached manifest body for', url, error);
+    return null;
+  }
+}
+
+function parseIsoDuration(duration) {
+  const match = /P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/.exec(duration || '');
+  if (!match) return 0;
+
+  const years = parseFloat(match[1] || '0');
+  const months = parseFloat(match[2] || '0');
+  const days = parseFloat(match[3] || '0');
+  const hours = parseFloat(match[4] || '0');
+  const minutes = parseFloat(match[5] || '0');
+  const seconds = parseFloat(match[6] || '0');
+  return (years * 365 * 24 * 3600) + (months * 30 * 24 * 3600) + (days * 24 * 3600) + (hours * 3600) + (minutes * 60) + seconds;
+}
+
+function substituteMpdVariables(path, rep, extra = {}) {
+  return String(path || '')
+    .replace(/\$RepresentationID\$/g, rep.id || '')
+    .replace(/\$Bandwidth\$/g, rep.bandwidth || 0)
+    .replace(/\$Number\$/g, extra.number !== undefined ? String(extra.number) : '$Number$')
+    .replace(/\$Time\$/g, extra.time !== undefined ? String(extra.time) : '$Time$');
+}
+
+// Extract segment URLs from an HLS manifest. This is used to hide .m3u8 segment URLs from the user and only show the manifest URL
+function collectM3U8SegmentUrls(manifestText, manifestUrl) {
+  const segmentUrls = new Set();
+  const lines = String(manifestText || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const isMasterPlaylist = lines.some((line) => line.startsWith('#EXT-X-STREAM-INF'));
+
+  if (isMasterPlaylist) {
+    return segmentUrls;
+  }
+
+  for (const line of lines) {
+    if (!line.startsWith('#')) {
+      segmentUrls.add(normalizeUrlForComparison(new URL(line, manifestUrl).href));
+      continue;
+    }
+
+    if (line.startsWith('#EXT-X-MAP:') || line.startsWith('#EXT-X-PART:') || line.startsWith('#EXT-X-PRELOAD-HINT:')) {
+      const uriMatch = line.match(/URI="([^"]+)"/i);
+      if (uriMatch) {
+        segmentUrls.add(normalizeUrlForComparison(new URL(uriMatch[1], manifestUrl).href));
+      }
+    }
+  }
+
+  return segmentUrls;
+}
+
+// Extract segment URLs from a DASH manifest. This is used to hide .mpd segment URLs from the user and only show the manifest URL
+function collectMpdSegmentUrls(manifestText, manifestUrl) {
+  const segmentUrls = new Set();
+
+  try {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(String(manifestText || ''), 'application/xml');
+    if (xmlDoc.querySelector('parsererror')) return segmentUrls;
+
+    const NS = xmlDoc.documentElement.namespaceURI || 'urn:mpeg:dash:schema:mpd:2011';
+    const mpdBase = manifestUrl.substring(0, manifestUrl.lastIndexOf('/') + 1);
+    const mpdRoot = xmlDoc.getElementsByTagNameNS(NS, 'MPD')[0];
+    const period = xmlDoc.getElementsByTagNameNS(NS, 'Period')[0];
+    if (!period) return segmentUrls;
+
+    const adaptationSets = Array.from(period.getElementsByTagNameNS(NS, 'AdaptationSet')).filter((asNode) => {
+      const mimeType = asNode.getAttribute('mimeType')?.toLowerCase() || '';
+      const contentType = asNode.getAttribute('contentType')?.toLowerCase() || '';
+      if (mimeType.startsWith('audio/') || mimeType.startsWith('video/')) return true;
+      if (contentType === 'audio' || contentType === 'video') return true;
+
+      const reps = asNode.getElementsByTagNameNS(NS, 'Representation');
+      for (let i = 0; i < reps.length; i++) {
+        const repMimeType = reps[i].getAttribute('mimeType')?.toLowerCase() || '';
+        if (repMimeType.startsWith('audio/') || repMimeType.startsWith('video/')) return true;
+      }
+      return false;
+    });
+
+    for (const asNode of adaptationSets) {
+      const setSegTmplNode = asNode.getElementsByTagNameNS(NS, 'SegmentTemplate')[0];
+      const repNodes = Array.from(asNode.getElementsByTagNameNS(NS, 'Representation'));
+
+      for (const repNode of repNodes) {
+        const repId = repNode.getAttribute('id') || '';
+        const bandwidth = parseInt(repNode.getAttribute('bandwidth') || '0', 10);
+
+        const repSegListNode = repNode.getElementsByTagNameNS(NS, 'SegmentList')[0] || asNode.getElementsByTagNameNS(NS, 'SegmentList')[0];
+        if (repSegListNode) {
+          const initNode = repSegListNode.getElementsByTagNameNS(NS, 'Initialization')[0];
+          const initUrl = initNode?.getAttribute('sourceURL') || initNode?.textContent?.trim() || null;
+          if (initUrl) {
+            segmentUrls.add(normalizeUrlForComparison(new URL(initUrl, mpdBase).href));
+          }
+
+          const segNodes = Array.from(repSegListNode.getElementsByTagNameNS(NS, 'SegmentURL'));
+          for (const segNode of segNodes) {
+            const media = segNode.getAttribute('media');
+            if (media) {
+              segmentUrls.add(normalizeUrlForComparison(new URL(media, mpdBase).href));
+            }
+          }
+          continue;
+        }
+
+        const repSegBaseNode = repNode.getElementsByTagNameNS(NS, 'SegmentBase')[0] || asNode.getElementsByTagNameNS(NS, 'SegmentBase')[0];
+        if (repSegBaseNode) {
+          continue;
+        }
+
+        const repSegTmplNode = repNode.getElementsByTagNameNS(NS, 'SegmentTemplate')[0];
+        const effectiveTmplNode = repSegTmplNode || setSegTmplNode;
+        if (!effectiveTmplNode) continue;
+
+        const tmpl = {
+          media: effectiveTmplNode.getAttribute('media'),
+          initialization: effectiveTmplNode.getAttribute('initialization'),
+          duration: parseInt(effectiveTmplNode.getAttribute('duration') || '0', 10),
+          timescale: parseInt(effectiveTmplNode.getAttribute('timescale') || '1', 10),
+          startNumber: effectiveTmplNode.getAttribute('startNumber') !== null ? parseInt(effectiveTmplNode.getAttribute('startNumber'), 10) : 1,
+        };
+
+        if (tmpl.initialization) {
+          segmentUrls.add(normalizeUrlForComparison(new URL(substituteMpdVariables(tmpl.initialization, { id: repId, bandwidth }), mpdBase).href));
+        }
+
+        const timelineNode = effectiveTmplNode.getElementsByTagNameNS(NS, 'SegmentTimeline')[0];
+        let segmentStartTimes = null;
+        if (timelineNode) {
+          const sElems = Array.from(timelineNode.getElementsByTagNameNS(NS, 'S'));
+          segmentStartTimes = [];
+          let cursor = null;
+          for (const s of sElems) {
+            const tAttr = s.getAttribute('t');
+            const dAttr = s.getAttribute('d');
+            const rAttr = s.getAttribute('r');
+            if (!dAttr) continue;
+
+            const duration = parseInt(dAttr, 10);
+            const repeatCount = (rAttr !== null ? parseInt(rAttr, 10) : 0) + 1;
+            if (tAttr !== null) cursor = parseInt(tAttr, 10);
+            else if (cursor === null) cursor = 0;
+
+            for (let i = 0; i < repeatCount; i++) {
+              segmentStartTimes.push(cursor);
+              cursor += duration;
+            }
+          }
+        }
+
+        const usesTimeVar = typeof tmpl.media === 'string' && tmpl.media.includes('$Time$');
+        const mediaPresentationDuration = mpdRoot?.getAttribute('mediaPresentationDuration');
+
+        if (usesTimeVar) {
+          if (!segmentStartTimes?.length) {
+            if (tmpl.duration > 0 && mediaPresentationDuration) {
+              const totalSeconds = parseIsoDuration(mediaPresentationDuration);
+              const segmentLengthSeconds = tmpl.duration / (tmpl.timescale || 1);
+              if (segmentLengthSeconds > 0) {
+                const estimatedCount = Math.ceil(totalSeconds / segmentLengthSeconds);
+                segmentStartTimes = [];
+                for (let index = 0; index < estimatedCount; index++) {
+                  segmentStartTimes.push(index * tmpl.duration);
+                }
+              }
+            }
+          }
+
+          for (const startTime of segmentStartTimes || []) {
+            const mediaPath = substituteMpdVariables(tmpl.media, { id: repId, bandwidth }, { time: startTime, number: tmpl.startNumber });
+            segmentUrls.add(normalizeUrlForComparison(new URL(mediaPath, mpdBase).href));
+          }
+        } else {
+          if (segmentStartTimes?.length) {
+            for (let index = 0; index < segmentStartTimes.length; index++) {
+              const mediaPath = substituteMpdVariables(tmpl.media, { id: repId, bandwidth }, { number: tmpl.startNumber + index });
+              segmentUrls.add(normalizeUrlForComparison(new URL(mediaPath, mpdBase).href));
+            }
+          } else if (tmpl.duration > 0 && mediaPresentationDuration) {
+            const totalSeconds = parseIsoDuration(mediaPresentationDuration);
+            const segmentLengthSeconds = tmpl.duration / (tmpl.timescale || 1);
+            if (segmentLengthSeconds > 0) {
+              const estimatedCount = Math.ceil(totalSeconds / segmentLengthSeconds);
+              for (let index = 0; index < estimatedCount; index++) {
+                const mediaPath = substituteMpdVariables(tmpl.media, { id: repId, bandwidth }, { number: tmpl.startNumber + index });
+                segmentUrls.add(normalizeUrlForComparison(new URL(mediaPath, mpdBase).href));
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to parse cached MPD manifest:', error);
+  }
+
+  return segmentUrls;
+}
+
+// Collect segment URLs from a manifest file based on its type (HLS or DASH). This function determines the manifest type by its extension and content, then extracts the segment URLs accordingly to hide them from the user interface.
+function collectSegmentUrlsFromManifest(manifestText, manifestUrl) {
+  const pathname = new URL(manifestUrl).pathname.toLowerCase();
+  if (pathname.endsWith('.m3u8')) {
+    return collectM3U8SegmentUrls(manifestText, manifestUrl);
+  }
+  if (pathname.endsWith('.mpd')) {
+    return collectMpdSegmentUrls(manifestText, manifestUrl);
+  }
+  return new Set();
+}
+
+// Build an index of manifest URLs and their associated segment URLs for all media requests. This is used to determine which segment URLs should be hidden from the user interface, as they are part of a manifest-based stream.
+async function buildManifestSegmentIndex(mediaRequests) {
+  const manifestIndex = new Map();
+
+  if (browser.extension?.inIncognitoContext) {
+    return manifestIndex;
+  }
+
+  const manifestCandidates = [];
+  for (const [url, requests] of Object.entries(mediaRequests || {})) {
+    const request = requests?.[0];
+    if (!request || !isManifestRequest(url, request)) continue;
+    manifestCandidates.push({ url, origin: new URL(url).origin });
+  }
+
+  await Promise.all(manifestCandidates.map(async ({ url, origin }) => {
+    const manifestText = await readCachedManifestText(url);
+    if (!manifestText) return;
+
+    const segmentUrls = collectSegmentUrlsFromManifest(manifestText, url);
+    const existing = manifestIndex.get(origin) || { hasReadableManifest: false, segments: new Set() };
+    existing.hasReadableManifest = true;
+    for (const segmentUrl of segmentUrls) {
+      existing.segments.add(segmentUrl);
+    }
+    manifestIndex.set(origin, existing);
+  }));
+
+  return manifestIndex;
+}
+
+// Determine if a given URL should be hidden from the user interface as a stream segment. This function checks if the URL is part of a manifest-based stream by looking it up in the manifest index, and also applies heuristics based on content type and file extension to identify potential segment URLs if the manifest is not readable.
+function shouldHideSegment(url, request, manifestIndex) {
+  const mediaURL = new URL(url);
+  const originData = manifestIndex.get(mediaURL.origin);
+  const normalizedUrl = normalizeUrlForComparison(url);
+
+  if (isManifestRequest(url, request)) {
+    return false;
+  }
+
+  if (originData?.hasReadableManifest) {
+    return originData.segments.has(normalizedUrl);
+  }
+
+  const pathname = mediaURL.pathname.toLowerCase();
+  const resHeaders = request?.responseHeaders || [];
+  const contentType = getHeaderValue(resHeaders, 'content-type').toLowerCase();
+  const contentLengthHeader = getHeaderValue(resHeaders, 'content-length');
+  const contentLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : null;
+
+  const segmentContentTypeRe = /video\/mp2t|video\/iso\.segment|application\/octet-stream|video\/x-mpegurl/i;
+  const segmentExtRe = /\.(ts|m4s|seg|frag|fragment)(?:$|\?)/i;
+  const subtitleExtRe = /\.(srt|vtt|sub|ass|ssa|idx|ttml|dfxp)(?:$|\?)/i;
+  const mayBeSubtitle = subtitleExtRe.test(pathname);
+
+  const looksLikeSegmentByType = contentType && segmentContentTypeRe.test(contentType);
+  const looksLikeSegmentByExt = segmentExtRe.test(pathname);
+
+
+  if ((looksLikeSegmentByType && !mayBeSubtitle) || looksLikeSegmentByExt) {
+    console.debug('Hiding stream segment:', url, { contentType, contentLength });
+    return true;
+  }
+
+  return false;
+}
+
+function isDownloadCancelledError(error) {
+  const message = (error && error.message) ? error.message : String(error || '');
+  return message.includes('DOWNLOAD_CANCELLED') || /abort|cancel/i.test(message);
+}
+
+function createProgressUI(requestId) {
+  const progressContainer = document.createElement('div');
+  progressContainer.style.display = 'flex';
+  progressContainer.style.alignItems = 'center';
+  progressContainer.style.gap = '8px';
+  progressContainer.style.width = '100%';
+
+  const loadingBar = document.createElement('mdui-linear-progress');
+  loadingBar.setAttribute('indeterminate', 'true');
+  loadingBar.style.width = '100%';
+
+  const cancelButton = document.createElement('mdui-button-icon');
+  cancelButton.variant = 'standard';
+  cancelButton.setAttribute('title', 'Cancel download');
+  cancelButton.addEventListener('click', async () => {
+    cancelButton.disabled = true;
+    try {
+      await browser.runtime.sendMessage({ action: 'cancelDownload', requestId });
+    } catch (error) {
+      cancelButton.disabled = false;
+      console.error('Error cancelling download:', error);
+    }
+  });
+
+  const cancelIconContainer = document.createElement('mdui-icon');
+  const cancelIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const cancelPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  cancelIcon.setAttribute('viewBox', '0 -960 960 960');
+  cancelPath.setAttribute('d', 'M256-200 200-256l224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z');
+  cancelIcon.appendChild(cancelPath);
+  cancelIconContainer.appendChild(cancelIcon);
+  cancelButton.appendChild(cancelIconContainer);
+
+  progressContainer.appendChild(loadingBar);
+  progressContainer.appendChild(cancelButton);
+
+  return { progressContainer, loadingBar, cancelButton };
+}
+
+/**
+ * Load the media list from the background script and display it in the window.
+ * This function retrieves media requests from the background script, filters them based on MIME types and file extensions, and displays them in a list format.
+ * It's a chunky bit of code, but it does what it's supposed to so it's staying there ヾ(⌐■_■)ノ♪
+ */
+function loadMediaList() {
+  // Display a loading spinner while the media requests are being retrieved
+  const mediaContainer = document.getElementById('media-list');
+  const loadingSpinner = document.getElementById('loading-media-list');
+  loadingSpinner.style.display = 'block';
+  mediaContainer.innerHTML = ''; // Clear previous content
+
+  const urlTabId = new URLSearchParams(window.location.search).get('tabId');
+  const parsedTabId = urlTabId ? parseInt(urlTabId, 10) : NaN;
+
+  const getTabPromise = !isNaN(parsedTabId)
+    ? Promise.resolve(parsedTabId)
+    : (browser.tabs?.query ? browser.tabs.query({ active: true, currentWindow: true }).then(tabs => (tabs && tabs[0] ? tabs[0].id : NaN)) : Promise.resolve(NaN));
+
+  getTabPromise.then(currentTabId => {
+  // Send a message to the background script to get media requests
+  // If the URL has the tabId parameter, move the corresponding media requests to the top of the list in their original order
+  browser.runtime.sendMessage({ action: 'getMediaRequests', tabId: currentTabId }).then(async (mediaRequests) => {
+    console.log('Media requests:', mediaRequests);
+    const videoExtensions = [".3g2", ".3gp", ".asx", ".avi", ".divx", ".4v", ".flv", ".ismv", ".m2t", ".m2ts", ".m2v", ".m4s", ".m4v", ".mk3d", ".mkv", ".mng", ".mov", ".mp2v", ".mp4", ".mp4v", ".mpe", ".mpeg", ".mpeg1", ".mpeg2", ".mpeg4", ".mpg", ".mxf", ".ogm", ".ogv", ".qt", ".rm", ".swf", ".ts", ".vob", ".vp9", ".webm", ".wmv"]
+    const audioExtensions = [".3ga", ".aac", ".ac3", ".adts", ".aif", ".aiff", ".alac", ".ape", ".asf", ".au", ".dts", ".f4a", ".f4b", ".flac", ".isma", ".it", ".m4a", ".m4b", ".m4r", ".mid", ".mka", ".mod", ".mp1", ".mp2", ".mp3", ".mp4a", ".mpa", ".mpga", ".oga", ".ogg", ".ogx", ".opus", ".ra", ".shn", ".spx", ".vorbis", ".wav", ".weba", ".wma", ".xm"];
+    const streamExtensions = [".f4f", ".f4m", ".m3u8", ".mpd", ".smil"];
+    const subtitleExtensions = [".srt", ".vtt", ".sub", ".ass", ".ssa", ".idx", ".ttml", ".dfxp"];
+
+
+
+    const fileExtensions = [...videoExtensions, ...audioExtensions, ...streamExtensions, ...subtitleExtensions];
+
+    const mediaTypes = [
+      "videoxflv",
+      "videoxmsvideo",
+      "videoxmswmv",
+      "videoquicktime",
+      "videomp4",
+      "audioxpcm",
+      "audiowav",
+      "audiompeg",
+      "audioaac",
+      "audioogg",
+      "audioxmswma",
+      "applicationvndapplempegurl",
+      "applicationxmpegurl",
+      "applicationdashxml",
+      "applicationoctetstream"
+    ];
+
+    const useMimeDetection = await browser.storage.local.get('mime-detection').then(result => result['mime-detection']) === '1';
+    const useUrlDetection = await browser.storage.local.get('url-detection').then(result => result['url-detection']) === '1';
+
+    const ongoingDownloads = await browser.runtime.sendMessage({ action: 'getOngoingDownloads' }) || [];
+    const completedRaw = await browser.storage.session.get('completedDownloads');
+    const failedRaw = await browser.storage.session.get('failedDownloads');
+    const completedDownloads = normalizeSessionList(completedRaw?.completedDownloads);
+    const failedDownloads = normalizeSessionList(failedRaw?.failedDownloads);
+    const hideSegments = await browser.storage.local.get('hide-segments').then(result => result['hide-segments']) === '1';
+    const manifestSegmentIndex = hideSegments ? await buildManifestSegmentIndex(mediaRequests) : new Map();
+    let hiddenSegmentCount = 0;
+    let isTabSortEnded = false
+    let isFirstRequest = true;
+    for (const url in mediaRequests) {
+      const requests = mediaRequests[url];
+
+      let mediaURL;
+      
+      try {
+        mediaURL = new URL(url);
+      } catch (error) {
+        continue;
+      }
+      // If the request is from youtube, show a popup to inform the user that downloading from youtube is not supported
+      if (mediaURL.hostname.includes("youtube.com") || mediaURL.hostname.includes("youtu.be") || mediaURL.hostname.includes("googlevideo.com")) {
+        handleYoutubeMediaRequest(url);
+        continue;
+      }
+
+      if (!Array.isArray(requests) || requests.length === 0) {
+        continue;
+      }
+      //If no content type or wrong content type, skip
+      const requestIds = requests.map(r => r.requestId) // Use this to preserve state when re-opening the add-on window, as the request objects are the same and we can track them by their ID, even if they have been made at a different time
+
+      let mimeMatch = false;
+      let urlMatch = false;
+
+      // Check if the request matches the media types or file extensions
+      if (useMimeDetection && requests[0]?.responseHeaders) {
+        // Also allow if the content type contains something else than what's in the media types, for example "contenttype : video/mp4; codecs="avc1.42E01E, mp4a.40.2" should match "video/mp4" (no matter the header name)
+        mimeMatch =
+          requests[0].responseHeaders.find(header => mediaTypes.some(type => header.value.toLowerCase().replace(/[^a-zA-Z0-9]/g, '').includes(type))) !== undefined
+          || requests[0].responseHeaders.find(header => header.value.toLowerCase().replace(/[^a-zA-Z0-9]/g, '').includes("video") || header.value.toLowerCase().replace(/[^a-zA-Z0-9]/g, '').includes("audio")) !== undefined // Or if any content type header starts with video/ or audio/
+      }
+
+      // Check if the request matches the file extensions
+      if (useUrlDetection) {
+        urlMatch = fileExtensions.some(ext => mediaURL.pathname.toLowerCase().endsWith(ext));
+      }
+
+      if (hideSegments && shouldHideSegment(url, requests[0], manifestSegmentIndex)) {
+        hiddenSegmentCount++;
+        continue;
+      }
+
+
+      if (!useMimeDetection && !useUrlDetection) {
+        // No filtering at all, proceed
+      } else if (!(mimeMatch || urlMatch)) {
+        // If neither detection matched, skip
+        continue;
+      }
+
+      if(isFirstRequest) {
+        // First list element
+        isFirstRequest = false;
+        // Display the corresponding separator if any of the requests is from the current tab, otherwise display the "media from other tabs" separator
+        if(requests.some(request => !isNaN(currentTabId) && request.tabId === currentTabId)) {
+          const separator = document.createElement('mdui-list-subheader');
+          separator.setAttribute('nonclickable', 'true');
+          separator.classList.add('separator');
+          separator.textContent = browser.i18n.getMessage('mediaFromThisTab');
+          mediaContainer.appendChild(separator);
+        } else {
+          // Nothing from this tab here
+          const separator = document.createElement('mdui-list-subheader');
+          separator.setAttribute('nonclickable', 'true');
+          separator.classList.add('separator');
+          separator.textContent = browser.i18n.getMessage('mediaFromOtherTabs');
+          mediaContainer.appendChild(separator);
+          isTabSortEnded = true;
+        }
+      } else if(!isTabSortEnded && !requests.some(request => !isNaN(currentTabId) && request.tabId === currentTabId)) {
+        // End of the sorted tab list
+        isTabSortEnded = true;
+        const separator = document.createElement('mdui-list-subheader');
+        separator.setAttribute('nonclickable', 'true');
+        separator.classList.add('separator');
+        separator.textContent = browser.i18n.getMessage('mediaFromOtherTabs');
+        mediaContainer.appendChild(separator);
+        isTabSortEnded = true;
+      }
+
+
+      // Create a container for each media request
+      const mediaDiv = document.createElement('mdui-list-item');
+      mediaDiv.setAttribute('nonclickable', 'true');
+      mediaDiv.classList.add('media-item');
+
+      // Add an icon to the media item
+      const mediaIcon = document.createElementNS("http://www.w3.org/2000/svg", 'svg');
+      const mediaIconContainer = document.createElement('mdui-icon');
+      mediaIconContainer.setAttribute('slot', 'icon');
+      const hasResponseHeaders = requests[0]?.responseHeaders && requests[0].responseHeaders.length > 0;
+      let path = document.createElementNS("http://www.w3.org/2000/svg", 'path');
+      if (hasResponseHeaders) {
+        if (streamExtensions.some(ext => mediaURL.pathname.toLowerCase().endsWith(ext)) || requests[0]?.responseHeaders.find(h => h.name.toLowerCase() === "content-type" && (h.value.includes("application/x-mpegURL") || h.value.includes("application/vnd.apple.mpegurl") || h.value.includes("application/dash+xml")))) {
+          //Media is a stream
+          // Check if it's an audio stream or a video stream based on the cached body of the manifest file. If it's an audio stream, show the audio icon, otherwise show the video icon.
+          const manifestText = await readCachedManifestText(url);
+          if(manifestText && manifestText.includes('RESOLUTION=')) {
+            // Contains video, show video library icon
+            path.setAttribute('d', 'm460-380 280-180-280-180v360ZM320-240q-33 0-56.5-23.5T240-320v-480q0-33 23.5-56.5T320-880h480q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H320Zm0-80h480v-480H320v480ZM160-80q-33 0-56.5-23.5T80-160v-560h80v560h560v80H160Zm160-720v480-480Z');
+          } else if(manifestText && manifestText.includes('TYPE=AUDIO')) {
+            // Contains only audio, show audio icon
+            path.setAttribute('d', 'M400-120q-66 0-113-47t-47-113q0-66 47-113t113-47q23 0 42.5 5.5T480-418v-422h240v160H560v400q0 66-47 113t-113 47Z');
+          } else if(manifestText && manifestText.includes('<MPD')) {
+            // DASH manifest, show video icon
+            path.setAttribute('d', 'm380-300 280-180-280-180v360ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z');
+          }
+          else {
+            // Unknown stream type, show generic stream icon
+            path.setAttribute('d', 'M40-480q0-92 34.5-172T169-791.5q60-59.5 140-94T480-920q91 0 171 34.5t140 94Q851-732 885.5-652T920-480h-80q0-75-28.5-140.5T734-735q-49-49-114.5-77T480-840q-74 0-139.5 28T226-735q-49 49-77.5 114.5T120-480H40Zm160 0q0-118 82-199t198-81q116 0 198 81t82 199h-80q0-83-58.5-141.5T480-680q-83 0-141.5 58.5T280-480h-80ZM360-64l-56-56 136-136v-132q-27-12-43.5-37T380-480q0-42 29-71t71-29q42 0 71 29t29 71q0 30-16.5 55T520-388v132l136 136-56 56-120-120L360-64Z');
+          }
+        }
+        else if (videoExtensions.some(ext => mediaURL.pathname.toLowerCase().endsWith(ext)) || requests[0]?.responseHeaders.find(h => h.name.toLowerCase() === "content-type" && h.value.startsWith("video/"))) {
+          //Media is a video
+          path.setAttribute('d', 'm380-300 280-180-280-180v360ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z');
+        }
+        else if (audioExtensions.some(ext => mediaURL.pathname.toLowerCase().endsWith(ext)) || requests[0]?.responseHeaders.find(h => h.name.toLowerCase() === "content-type" && h.value.startsWith("audio/"))) {
+          //Media is an audio
+          path.setAttribute('d', 'M400-120q-66 0-113-47t-47-113q0-66 47-113t113-47q23 0 42.5 5.5T480-418v-422h240v160H560v400q0 66-47 113t-113 47Z');
+        } else if (subtitleExtensions.some(ext => mediaURL.pathname.toLowerCase().endsWith(ext)) || requests[0]?.responseHeaders.find(h => h.name.toLowerCase() === "content-type" && (h.value.includes("text/vtt") || h.value.includes("application/x-subrip") || h.value.includes("application/ttml+xml")))) {
+          //Media is a subtitle
+          path.setAttribute('d', 'M240-320h320v-80H240v80Zm400 0h80v-80h-80v80ZM240-480h80v-80h-80v80Zm160 0h320v-80H400v80ZM160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v480q0 33-23.5 56.5T800-160H160Zm0-80h640v-480H160v480Zm0 0v-480 480Z');
+        }
+        else {
+          //Media is unknown
+          path.setAttribute('d', 'M240-80q-33 0-56.5-23.5T160-160v-640q0-33 23.5-56.5T240-880h320l240 240v480q0 33-23.5 56.5T720-80H240Zm280-520v-200H240v640h480v-440H520ZM240-800v200-200 640-640Z');
+        }
+      } else {
+        //No response headers, unknown media
+        path.setAttribute('d', 'M240-80q-33 0-56.5-23.5T160-160v-640q0-33 23.5-56.5T240-880h320l240 240v480q0 33-23.5 56.5T720-80H240Zm280-520v-200H240v640h480v-440H520ZM240-800v200-200 640-640Z');
+      }
+      mediaIcon.setAttribute('viewBox', '0 -960 960 960');
+      mediaIcon.appendChild(path);
+      mediaIconContainer.appendChild(mediaIcon);
+      mediaDiv.appendChild(mediaIconContainer);
+
+      const subtitleDiv = document.createElement('div');
+      subtitleDiv.classList.add('media-subtitle');
+      // subtitleDiv.style.display = 'flex';
+      // subtitleDiv.style.justifyContent = 'space-between';
+      // subtitleDiv.style.flexWrap = 'wrap';
+
+      // Display the media file name
+      if(requests[0]?.name) {
+        const fileName = requests[0].name
+        const fileNameDiv = document.createElement('div');
+        fileNameDiv.textContent = fileName;
+        mediaDiv.appendChild(fileNameDiv);
+
+        const urlName = getFileName(url) || url;
+        const urlNameDiv = document.createElement('div');
+        urlNameDiv.textContent = urlName;
+        urlNameDiv.style.fontSize = '0.8em';
+        subtitleDiv.appendChild(urlNameDiv);
+      } else {
+        const urlName = getFileName(url) || url;
+        const urlNameDiv = document.createElement('div');
+        urlNameDiv.textContent = urlName;
+        mediaDiv.appendChild(urlNameDiv);
+      }
+
+      //Display request method and referrer
+      const descriptionDiv = document.createElement('div');
+      descriptionDiv.style.fontSize = '0.8em';
+      console.log(requests)
+      descriptionDiv.textContent = browser.i18n.getMessage("requestText", [requests[0]?.method ?? browser.i18n.getMessage("requestMethodUnknown"), new URL(decodeURI(requests[0]?.requestHeaders?.find(h => h.name.toLowerCase() === "referer")?.value || requests[0].url)).hostname || browser.i18n.getMessage("requestSourceUnknown"), new Date(requests[0]?.timeStamp).toLocaleTimeString(browser.i18n.getUILanguage()) || "??:??"]);
+      subtitleDiv.appendChild(descriptionDiv);
+
+      mediaDiv.appendChild(subtitleDiv);
+
+      // Create a div to put actions at the end of the media item
+      const actionsDiv = document.createElement('div');
+      actionsDiv.style.display = 'flex';
+      actionsDiv.style.alignItems = 'center';
+      actionsDiv.style.flexWrap = 'wrap';
+      actionsDiv.style.margin = '5px';
+      mediaDiv.appendChild(actionsDiv);
+      // Create a div to put the buttons in
+      const segmentedButtonGroup = document.createElement('mdui-segmented-button-group');
+      segmentedButtonGroup.style.display = 'flex';
+
+      // Create a select for the media sizes
+      const sizeSelect = document.createElement('mdui-select');
+      sizeSelect.variant = 'outlined';
+      sizeSelect.label = browser.i18n.getMessage('size');
+      sizeSelect.style.width = 'auto';
+      sizeSelect.id = url;
+      sizeSelect.classList.add('media-size-select');
+
+      // Add a button to download the selected media file
+      const downloadButton = document.createElement('mdui-segmented-button');
+      downloadButton.textContent = browser.i18n.getMessage("downloadMedia");
+      downloadButton.addEventListener('click', () => {
+        downloadFile(url, requests[0].name, mediaDiv);
+      });
+      downloadButton.id = 'download-button';
+      downloadButton.classList.add('download-button');
+
+      // Add an icon to the download button
+      const mduiDownloadIconContainer = document.createElement('mdui-icon');
+      const svgNamespace = "http://www.w3.org/2000/svg";
+      mduiDownloadIconContainer.setAttribute('slot', 'icon');
+      const downloadIcon = document.createElementNS(svgNamespace, 'svg');
+      downloadIcon.setAttribute('viewBox', '0 -960 960 960');
+      const downloadPath = document.createElementNS(svgNamespace, 'path');
+      // Check if the media is in the completed or failed downloads, and change the icon accordingly
+      if (completedDownloads.length !== 0 && completedDownloads.includes(requestIds[0])) {
+        // Completed download icon (checkmark)
+        downloadPath.setAttribute('d', 'm424-296 282-282-56-56-226 226-114-114-56 56 170 170Zm56 216q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z');
+      } else if (failedDownloads.length !== 0 && failedDownloads.includes(requestIds[0])) {
+        // Failed download icon (cross)
+        downloadPath.setAttribute('d', 'M508.5-291.5Q520-303 520-320t-11.5-28.5Q497-360 480-360t-28.5 11.5Q440-337 440-320t11.5 28.5Q463-280 480-280t28.5-11.5ZM440-440h80v-240h-80v240Zm40 360q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z');
+      } else {
+        // Default download icon
+        downloadPath.setAttribute('d', 'M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z');
+      }
+      downloadPath.setAttribute('id', 'download-icon-path');
+      downloadIcon.appendChild(downloadPath);
+      mduiDownloadIconContainer.appendChild(downloadIcon);
+      downloadButton.appendChild(mduiDownloadIconContainer);
+
+      //Placeholder loading bar
+      let loadingBar = null;
+      let progressContainer = null;
+
+      // Add options for the media sizes
+      let isFirstElement = true;
+      for (const request of requests) {
+        const option = document.createElement('mdui-menu-item');
+        option.value = request.size;
+        option.textContent = getHumanReadableSize(request.size);
+        if (isFirstElement) {
+          sizeSelect.value = request.size;
+          isFirstElement = false;
+        }
+        sizeSelect.appendChild(option);
+        ongoingDownloads.forEach(download => {
+          if (download.requestId === request.requestId) {
+            downloadButton.disabled = true;
+        downloadButton.loading = true;
+
+        // If the download is ongoing, we add a loading bar and a cancel button
+        const progressUI = createProgressUI(request.requestId);
+        progressContainer = progressUI.progressContainer;
+        loadingBar = progressUI.loadingBar;
+        progressListener = function progressListener(message, sender, sendResponse) {
+          if (message.action === 'updateProgress' && message.requestId === request.requestId) {
+            if (message.percentage !== null) {
+              loadingBar.removeAttribute('indeterminate');
+              loadingBar.value = message.percentage / 100;
+            } else {
+              loadingBar.setAttribute('indeterminate', 'true');
+            }
+          }
+          if (message.action === 'downloadComplete' && message.requestId === request.requestId) {
+            if (progressContainer && progressContainer.parentElement === mediaDiv) {
+              mediaDiv.removeChild(progressContainer);
+            }
+            mediaDiv.querySelector("#download-button").loading = false;
+            mediaDiv.querySelector("#download-button").disabled = false;
+            downloadPath.setAttribute('d', 'm424-296 282-282-56-56-226 226-114-114-56 56 170 170Zm56 216q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z');
+            // Add a helper link in case the download didn't start (user-facing guidance)
+            try {
+              if (!mediaDiv.querySelector('.download-help-link')) {
+                const helpLink = document.createElement('a');
+                helpLink.className = 'download-help-link';
+                helpLink.href = '#force-device-type';
+                helpLink.textContent = 'Download has not started?';
+                helpLink.addEventListener('click', (ev) => {
+                  ev.preventDefault();
+                  showSettingsSection('#force-device-type', "download");
+                });
+                mediaDiv.appendChild(helpLink);
+              }
+            } catch (e) { console.warn('Could not append download help link', e); }
+            browser.runtime.onMessage.removeListener(progressListener);
+            progressListener = null;
+          }
+          if (message.action === 'downloadFailed' && message.requestId === request.requestId) {
+            if (progressContainer && progressContainer.parentElement === mediaDiv) {
+              mediaDiv.removeChild(progressContainer);
+            }
+            mediaDiv.querySelector("#download-button").loading = false;
+            mediaDiv.querySelector("#download-button").disabled = false;
+            downloadPath.setAttribute('d', 'M508.5-291.5Q520-303 520-320t-11.5-28.5Q497-360 480-360t-28.5 11.5Q440-337 440-320t11.5 28.5Q463-280 480-280t28.5-11.5ZM440-440h80v-240h-80v240Zm40 360q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z');
+            browser.runtime.onMessage.removeListener(progressListener);
+            progressListener = null;
+          }
+          if (message.action === 'downloadCancelled' && message.requestId === request.requestId) {
+            if (progressContainer && progressContainer.parentElement === mediaDiv) {
+              mediaDiv.removeChild(progressContainer);
+            }
+            mediaDiv.querySelector("#download-button").loading = false;
+            mediaDiv.querySelector("#download-button").disabled = false;
+            browser.runtime.onMessage.removeListener(progressListener);
+            progressListener = null;
+          }
+        };
+
+        browser.runtime.onMessage.addListener(progressListener);
+          }
+        });
+      }
+
+      // Change description based on the selected size
+      sizeSelect.addEventListener('change', () => {
+        const selectedSize = sizeSelect.value;
+        const request = requests.find(request => request.size === selectedSize);
+        const referer = new URL(decodeURI(requests[0]?.requestHeaders?.find(h => h.name.toLowerCase() === "referer")?.value || requests[0].url)).hostname || browser.i18n.getMessage("requestSourceUnknown");
+        const timeStamp = new Date(request?.timeStamp).toLocaleTimeString(browser.i18n.getUILanguage()) || "??:??"
+        descriptionDiv.textContent = browser.i18n.getMessage("requestText", [request?.method || browser.i18n.getMessage("requestMethodUnknown"), referer, timeStamp]);
+      });
+
+      actionsDiv.appendChild(sizeSelect);
+
+      actionsDiv.appendChild(segmentedButtonGroup);
+
+      // Add a button to copy the selected media URL to the clipboard
+      const copyButton = document.createElement('mdui-segmented-button');
+      copyButton.textContent = browser.i18n.getMessage("copyURL");
+      copyButton.addEventListener('click', () => {
+        navigator.clipboard.writeText(url).then(() => {
+          console.log('URL copied to clipboard:', url);
+        }).catch((error) => {
+          console.error('Error copying URL to clipboard:', error);
+          showDialog(browser.i18n.getMessage("URLCopyError"), null, { error: `Error copying URL to clipboard: ${error}` });
+        });
+      });
+
+      // Add an icon to the copy button
+      const mduiCopyIconContainer = document.createElement('mdui-icon');
+      mduiCopyIconContainer.setAttribute('slot', 'icon');
+      const copyIcon = document.createElementNS(svgNamespace, 'svg');
+      copyIcon.setAttribute('viewBox', '0 -960 960 960');
+      path = document.createElementNS(svgNamespace, 'path');
+      path.setAttribute('d', 'M300-180v-200l160 100-160 100Zm220-380q-50 0-85-35t-35-85q0-50 35-85t85-35h50v60h-50q-25 0-42.5 17.5T460-680q0 25 17.5 42.5T520-620h50v60h-50Zm110 0v-60h50q25 0 42.5-17.5T740-680q0-25-17.5-42.5T680-740h-50v-60h50q50 0 85 35t35 85q0 50-35 85t-85 35h-50Zm-110-90v-60h160v60H520Zm124 250v-80h196v-360H360v360h-80v-360q0-33 23.5-56.5T360-920h480q33 0 56.5 23.5T920-840v360q0 33-23.5 56.5T840-400H644ZM120-40q-33 0-56.5-23.5T40-120v-320q0-33 23.5-56.5T120-520h480q33 0 56.5 23.5T680-440v320q0 33-23.5 56.5T600-40H120Zm0-80h480v-320H120v320Zm480-540ZM360-280Z');
+      copyIcon.appendChild(path);
+      mduiCopyIconContainer.appendChild(copyIcon);
+      copyButton.appendChild(mduiCopyIconContainer);
+
+      // Add a button to preview the selected media file
+      const previewButton = document.createElement('mdui-segmented-button');
+      previewButton.textContent = browser.i18n.getMessage("previewMedia");
+      previewButton.addEventListener('click', () => {
+        const selectedValue = sizeSelect.value;
+        const menuItems = Array.from(sizeSelect.querySelectorAll('mdui-menu-item'));
+        const selectedSizeIndex = menuItems.findIndex(item => item.value === selectedValue);
+
+        let isStream = streamExtensions.some(ext =>
+          new URL(url).pathname.toLowerCase().endsWith(ext)
+        );
+        if (isStream && new URL(url).pathname.toLowerCase().endsWith('.mpd')) {
+          // For MPD no need to handle stream differently, just pass the URL
+          isStream = '';
+        }
+        browser.tabs.create({
+          url: browser.runtime.getURL(`/mediaPreviewer.html?mediaUrl=${encodeURIComponent(url)}&selectedSize=${selectedSizeIndex}&isStream=${isStream}`),
+        });
+      });
+
+      // Add an icon to the preview button
+      const mduiPreviewIconContainer = document.createElement('mdui-icon');
+      mduiPreviewIconContainer.setAttribute('slot', 'icon');
+      const previewIcon = document.createElementNS(svgNamespace, 'svg');
+      previewIcon.setAttribute('viewBox', '0 -960 960 960');
+      const previewPath = document.createElementNS(svgNamespace, 'path');
+      previewPath.setAttribute('d', 'm380-300 280-180-280-180v360ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Z');
+      previewIcon.appendChild(previewPath);
+      mduiPreviewIconContainer.appendChild(previewIcon);
+      previewButton.appendChild(mduiPreviewIconContainer);
+
+      // Append the buttons to the actions div
+      segmentedButtonGroup.appendChild(downloadButton);
+      segmentedButtonGroup.appendChild(copyButton);
+      segmentedButtonGroup.appendChild(previewButton);
+
+      // Append the size select and actions div to the media item
+      mediaDiv.appendChild(actionsDiv);
+
+      // If a loading bar was created for this media item, append it below the actions
+      if (progressContainer) {
+        mediaDiv.appendChild(progressContainer);
+      }
+
+
+      // Add the media container to the popup
+      mediaContainer.appendChild(mediaDiv);
+
+      //Add divider
+      const divider = document.createElement('mdui-divider');
+      mediaContainer.appendChild(divider);
+    }
+    if(hiddenSegmentCount > 0) {
+      const hiddenSegmentsInfo = document.createElement('div');
+      hiddenSegmentsInfo.setAttribute("id", "hidden-segments-info");
+      hiddenSegmentsInfo.textContent = browser.i18n.getMessage("hiddenSegmentsInfo", [hiddenSegmentCount]);
+      hiddenSegmentsInfo.style.textAlign = 'center';
+      mediaContainer.appendChild(hiddenSegmentsInfo);
+    }
+    endOfMediaList = document.createElement('div');
+    endOfMediaList.setAttribute("id", "end-of-media-list");
+    endOfMediaList.textContent = browser.i18n.getMessage("endOfMediaList");
+    endOfMediaList.style.textAlign = 'center';
+    loadingSpinner.style.display = 'none'; // Hide the loading spinner
+    mediaContainer.appendChild(endOfMediaList);
+
+    if(navigator.userAgent.includes("Mobile;")){
+      const endOfMediaListAndroid = document.createElement("h3")
+      endOfMediaListAndroid.textContent = browser.i18n.getMessage("endOfMediaListAndroid");
+      endOfMediaList.appendChild(endOfMediaListAndroid);
+    } else {
+      endOfMediaList.appendChild(document.createElement('br'));
+    }
+
+    endOfMediaListLink = document.createElement('a');
+    endOfMediaListLink.textContent = browser.i18n.getMessage("endOfMediaListLink");
+    endOfMediaListLink.target = "_blank";
+    endOfMediaListLink.href = "https://docs.google.com/forms/d/e/1FAIpQLSdXpVKZaJm-Yk6DmnkFZHxPLRH4xK51uk7NeioKJ8CxZbxXVA/viewform?usp=pp_url&entry.1792028239=My+media+is+not+being+detected";
+    endOfMediaList.appendChild(endOfMediaListLink);
+  }).catch((error) => {
+    console.error('Error retrieving media requests:', error);
+    showDialog(browser.i18n.getMessage("listLoadError", [error]), null, { error: `Error retrieving media requests. ${error}` });
+  });
+  });
+}
+
+/** Handle media requests from YouTube by showing an alert once per session */
+async function handleYoutubeMediaRequest(url) {
+  if(await browser.storage.local.get('show-youtube-alert').then(result => result['show-youtube-alert']) == '0' || sessionStorage.getItem('shownYoutubeAlert') === '1') {
+    return; // Do not show the alert if it's been disabled or already shown
+  }
+  sessionStorage.setItem('shownYoutubeAlert', '1');
+  showDialogCustom({
+    showTextField: false,
+    headline: browser.i18n.getMessage("youtubeDialogAskTitle"),
+    description: browser.i18n.getMessage("youtubeDialogAskMessage"),
+    confirmText: browser.i18n.getMessage("youtubeDialogAskOkButton"),
+    cancelText: browser.i18n.getMessage("cancelButton"),
+    onConfirm: () => {
+      // Show Invidious download page on Android
+      mdui.confirm({
+        headline: browser.i18n.getMessage("youtubeDialogDownloaderTitle"),
+        description: browser.i18n.getMessage("youtubeDialogDownloaderMessage"),
+        onConfirm: () => {
+          window.open('https://inv.nadeko.net', '_blank');
+        }
+      });
+    },
+    onCancel: () => { },
+  });
+  document.getElementById('youtube-dialog-dont-show-again').addEventListener('change', async (event) => {
+    if (event.target.checked) {
+      await browser.storage.local.set({ 'show-youtube-alert': '0' });
+    } else {
+      await browser.storage.local.set({ 'show-youtube-alert': '1' });
+    }
+  })
+  
+}
+
+/**
+ * Clear the media list from the local storage and refresh the display of the media list. Will not clear ongoing downloads.
+ * @returns {null} Does not return anything, but throws on error
+ */
+function clearMediaList() {
+  browser.runtime.sendMessage({ action: 'getOngoingDownloads' }).then((ongoingDownloads) => {
+    browser.runtime.sendMessage({ action: 'clearStorage', ongoingDownloads: ongoingDownloads }).then(() => {
+      console.log('Media list cleared');
+      loadMediaList(); //Refresh the display
+    }).catch((error) => {
+      console.error('Error clearing media list:', error);
+      showDialog(browser.i18n.getMessage("listClearError", [error]), null, { error: `Error clearing media list: ${error}` });
+    });
+  }).catch((error) => {
+    console.error('Error retrieving ongoing downloads:', error);
+    showDialog(browser.i18n.getMessage("listClearError", [error]), null, { error: `Error retrieving ongoing downloads: ${error}` });
+  });
+}
+
+/**
+ * Get the file name from the URL, limiting it to 50 characters. This is what's displayed in the media list.
+ * @param {String} url The URL of the media file
+ * @returns {String} The file name extracted from the URL, limited to the specified length
+*/
+function getFileName(url, maxLength = 100) {
+  try {
+    let parsedUrl = new URL(url);
+
+    // Extract path from URL
+    let pathname = parsedUrl.pathname; // e.g. /path/to/file.mp4
+    let fileName = pathname.substring(pathname.lastIndexOf('/') + 1);
+
+    // Remove query string from file name
+    fileName = fileName.split('?')[0];
+
+    // Replace these characters with underscores as they are not allowed in Windows file names : < > : " / \ | ? * and control characters (0-31)
+    fileName = fileName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+
+    if (fileName === '') {
+      fileName = parsedUrl.hostname; // If there is no file name, use the hostname
+    }
+
+    //Limit to xx characters, but still show the extension
+    if (fileName.length > maxLength) {
+      fileName = fileName.substring(0, maxLength) + '…' + fileName.substring(fileName.lastIndexOf('.'));
+    }
+
+    return decodeURIComponent(fileName);
+  } catch (error) {
+    console.error("Invalid URL", error);
+    throw new Error('Invalid URL:', error);
+  }
+}
+
+/**
+ * Convert size in bytes to a human-readable format
+ * @param {Number} size Size in bytes (like 1024, 2048, etc.)
+ * @returns {String} Human-readable size (e.g. "1.00 Kb", "2.00 Mb", etc.)
+ */
+function getHumanReadableSize(size) {
+  const units = ['b', 'Kb', 'Mb', 'Gb', 'Tb'];
+  if (isNaN(size)) {
+    return browser.i18n.getMessage("unknownSize"); // Return a message if size is not a number
+  }
+  let unitIndex = 0;
+  let sizeInBytes = parseInt(size);
+  while (sizeInBytes > 1024) {
+    sizeInBytes /= 1024;
+    unitIndex++;
+  }
+  return `${sizeInBytes.toFixed(2)} ${units[unitIndex]}`;
+}
+
+async function isAndroid() {
+  // Used to check if the add-on should initiate downloads from the background or if it should queue them for the popup to handle, since on Firefox for Android, downloads triggered from background scripts using the downloads API or blob URLs don't work properly.
+  const forcedDeviceType = await browser.storage.local.get('force-device-type').then(result => result['force-device-type']);
+  if (forcedDeviceType === 'android') {
+    return true;
+  }
+  if (forcedDeviceType === 'desktop') {
+    return false;
+  }
+  return navigator.userAgent.includes("Mobile;")
+}
+
+async function shouldDownload() {
+  if(await isAndroid() && browser.extension?.inIncognitoContext ) {
+    if(await browser.storage.local.get('android-incognito-download-warning').then(result => result['android-incognito-download-warning']) === '0') {
+      return true; // User has opted to not show the warning again, proceed with download
+    }
+    // On Android, downloads from extension incognito windows are not allowed, so we show a dialog to the user and ask if they want to cancel the download
+    return new Promise((resolve) => {
+      showDialogCustom({
+        showTextField: false,
+        headline: browser.i18n.getMessage("androidIncognitoDownloadTitle"),
+        description: browser.i18n.getMessage("androidIncognitoDownloadMessage"),
+        confirmText: browser.i18n.getMessage("androidIncognitoDownloadOkButton"),
+        cancelText: browser.i18n.getMessage("cancelButton"),
+        onConfirm: () => {
+          resolve(true); // User confirmed, proceed with download
+        },
+        onCancel: () => {
+          resolve(false); // User cancelled, do not proceed with download
+        },
+        showDontShowAgainCheckbox: true,
+        onDontShowAgainChange: async (checked) => {
+          if (checked) {
+            await browser.storage.local.set({ 'android-incognito-download-warning': '0' });
+          } else {
+            await browser.storage.local.set({ 'android-incognito-download-warning': '1' });
+          }
+        },
+      });
+    });
+  } else {
+    return true; // If not on Android or not in incognito, proceed with download
+  }
+}
+
+
+/**
+* Download the media file using the selected size and method
+* @param {String} url The URL of the media file to download
+* @param {HTMLElement} mediaDiv The div element of the list item to be downloaded, used to get the selected size, show the loading bar and change the button state
+* @returns {Promise<void>} A promise that resolves when the download is complete or fails
+*/
+async function downloadFile(url, fileName = null, mediaDiv) {
+  if(!await shouldDownload()) {
+    console.warn('Download was cancelled.');
+    return;
+  }
+  console.log('Downloading media file:', url);
+  let wakeLock = null
+  let progressListener = null;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    console.debug("Wake Lock is active!");
+  } catch (err) {
+    // The Wake Lock request has failed - usually system related, such as battery.
+    console.warn(`Could not activate wake lock due to error ${err.name}, ${err.message}`);
+  }
+
+  const mediaCache = await browser.storage.local.get('media-cache').then((result) => result['media-cache'])
+  const mediaCachePrivate = await browser.storage.local.get('media-cache-private').then((result) => result['media-cache-private'])
+
+  //skipCache is to know if we should use the media cache (get media file or segments from cache) or refetch, based on the user settings
+  const skipCache = (mediaCache === '0' && !browser.extension?.inIncognitoContext) || (mediaCachePrivate === '0' && browser.extension?.inIncognitoContext)
+
+  const sizeSelect = mediaDiv.querySelector('.media-size-select');
+  let loadingBar = null;
+  let progressContainer = null;
+  const requests = await browser.runtime.sendMessage({ action: 'getMediaRequests', url: url }); // Get the media requests for the given URL from the background script
+  const forbiddenHeaders = [
+    "Accept-Charset", "Accept-Encoding", "Access-Control-Request-Headers", "Access-Control-Request-Method",
+    "Connection", "Content-Length", "Cookie", "Date", "DNT", "Expect", "Host", "Keep-Alive", "Origin",
+    "Permissions-Policy", "Range", "Referer", "TE", "Trailer", "Transfer-Encoding", "Upgrade", "Via"
+  ]; // List of headers that should not be sent with the download request because fetch doesn't accept them
+  const selectedValue = sizeSelect.value;
+  const menuItems = Array.from(sizeSelect.querySelectorAll('mdui-menu-item'));
+  let selectedSizeIndex = menuItems.findIndex(item => item.value === selectedValue);
+  try {
+
+    // If no size is selected, default to index 0
+    if (selectedSizeIndex === -1) {
+      console.warn('No size selected, defaulting to index 0');
+      selectedSizeIndex = 0;
+    }
+
+    // Set the request headers for the download to the same headers that were used to fetch the media file on the site, to reproduce the same request, without the headers forbidden by the fetch api.
+    if (!requests[url] || !requests[url][selectedSizeIndex] || !requests[url][selectedSizeIndex].requestHeaders) {
+      throw new Error(browser.i18n.getMessage("noRequestFoundError"));
+    }
+    const headers = requests[url][selectedSizeIndex].requestHeaders.filter(header =>
+      !forbiddenHeaders.includes(header.name) &&
+      !header.name.startsWith('Sec-') &&
+      !header.name.startsWith('Proxy-')
+    );
+    const requestId = requests[url][selectedSizeIndex].requestId;
+
+    const downloadMethod = await browser.storage.local.get('download-method').then(result => result['download-method']);
+    const streamDownload = await browser.storage.local.get('stream-download').then(result => result['stream-download']);
+
+    progressListener = function progressListener(message, sender, sendResponse) {
+      if (message.action === 'updateProgress' && message.requestId === requestId) {
+        if (message.percentage !== null) {
+          loadingBar.removeAttribute('indeterminate');
+          loadingBar.value = message.percentage / 100;
+        } else {
+          loadingBar.setAttribute('indeterminate', 'true');
+        }
+      }
+      if (message.action === 'downloadComplete' && message.requestId === requestId) {
+        if (progressContainer && progressContainer.parentElement === mediaDiv) {
+          mediaDiv.removeChild(progressContainer);
+        }
+        mediaDiv.querySelector("#download-button").loading = false;
+        mediaDiv.querySelector("#download-button").disabled = false;
+        browser.runtime.onMessage.removeListener(progressListener);
+        mediaDiv.querySelector("#download-icon-path").setAttribute('d', 'm424-296 282-282-56-56-226 226-114-114-56 56 170 170Zm56 216q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z');
+        progressListener = null;
+        try {
+              if (!mediaDiv.querySelector('.download-help-link')) {
+                const helpLink = document.createElement('a');
+                helpLink.className = 'download-help-link';
+                helpLink.href = '#force-device-type';
+                helpLink.textContent = 'Download has not started?';
+                helpLink.addEventListener('click', (ev) => {
+                  ev.preventDefault();
+                  showSettingsSection('#force-device-type', "download");
+                });
+                mediaDiv.appendChild(helpLink);
+              }
+            } catch (e) { console.warn('Could not append download help link', e); }
+      }
+      if (message.action === 'downloadFailed' && message.requestId === requestId) {
+        if (progressContainer && progressContainer.parentElement === mediaDiv) {
+          mediaDiv.removeChild(progressContainer);
+        }
+        mediaDiv.querySelector("#download-button").loading = false;
+        mediaDiv.querySelector("#download-button").disabled = false;
+        browser.runtime.onMessage.removeListener(progressListener);
+        mediaDiv.querySelector("#download-icon-path").setAttribute('d', 'M508.5-291.5Q520-303 520-320t-11.5-28.5Q497-360 480-360t-28.5 11.5Q440-337 440-320t11.5 28.5Q463-280 480-280t28.5-11.5ZM440-440h80v-240h-80v240Zm40 360q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z');
+        progressListener = null;
+      }
+      if (message.action === 'downloadCancelled' && message.requestId === requestId) {
+        if (progressContainer && progressContainer.parentElement === mediaDiv) {
+          mediaDiv.removeChild(progressContainer);
+        }
+        mediaDiv.querySelector("#download-button").loading = false;
+        mediaDiv.querySelector("#download-button").disabled = false;
+        browser.runtime.onMessage.removeListener(progressListener);
+        progressListener = null;
+      }
+    };
+
+    browser.runtime.onMessage.addListener(progressListener);
+
+    // Change the UI to indicate that the download is in progress
+    mediaDiv.querySelector("#download-button").loading = true
+    mediaDiv.querySelector("#download-button").disabled = true
+    const progressUI = createProgressUI(requestId);
+    progressContainer = progressUI.progressContainer;
+    loadingBar = progressUI.loadingBar;
+    mediaDiv.appendChild(progressContainer);
+
+    const lowerPath = new URL(url).pathname.toLowerCase();
+    const responseHeaders = requests[url][selectedSizeIndex].responseHeaders || [];
+    const hasMimeType = mimeType => responseHeaders.some(header =>
+      /*header.name.toLowerCase() === 'content-type' &&*/ normalizeContentType(header.value).includes(mimeType)
+    );
+    const isM3U8 = lowerPath.endsWith('.m3u8') || hasMimeType('applicationxmpegurl') || hasMimeType('applicationvndapplempegurl');
+    const isMPD = lowerPath.endsWith('.mpd') || hasMimeType('applicationdashxml');
+    const renamePreference = await browser.storage.local.get('rename-downloads-v2').then(result => result['rename-downloads-v2']);
+    if (renamePreference === 'ask' ) {
+      try{
+      fileName = await mdui.prompt({
+        headline: browser.i18n.getMessage("fileNamePromptTitle"),
+        description: browser.i18n.getMessage("fileNamePromptDescription"),
+        cancelText: browser.i18n.getMessage("cancelButton"),
+        textFieldOptions: {
+          label: browser.i18n.getMessage("fileNamePromptFieldLabel"),
+          placeholder: getFileName(url).substring(0, getFileName(url).lastIndexOf('.')),
+          required: true,
+          suffix: isM3U8 ? '.m3u8' : isMPD ? '.mpd' : url.substring(url.lastIndexOf('.')),
+        }
+      });
+    } catch (error) {
+      // If the user cancels the prompt, we catch the error and return without downloading
+      if (progressContainer && progressContainer.parentElement === mediaDiv) {
+        mediaDiv.removeChild(progressContainer);
+      }
+      mediaDiv.querySelector("#download-button").loading = false;
+      mediaDiv.querySelector("#download-button").disabled = false;
+      return;
+    }
+    } else if (renamePreference === 'url' || fileName === null) {
+      fileName = getFileName(url);
+    }
+
+    console.log(`MIME is : ${requests[url][selectedSizeIndex].responseHeaders?.find(h => h.name.toLowerCase() === "content-type")?.value}`);
+
+    if (streamDownload === 'offline' && isM3U8) {
+      console.log('M3U8 detected → downloadM3U8Offline()');
+      //await downloadM3U8Offline(url, headers, downloadMethod, loadingBar, requests[url][selectedSizeIndex]);
+      const result = await browser.runtime.sendMessage({ action: 'downloadM3U8Offline', url, fileName, headers, downloadMethod, request: requests[url][selectedSizeIndex], skipCache: skipCache });
+      if (result && result.error) {
+        throw new Error(result.error);
+      }
+      return;
+    }
+
+    if (streamDownload === 'offline' && isMPD) {
+      console.log('MPD detected → downloadMPDOffline()');
+      //await downloadMPDOffline(url, headers, downloadMethod, loadingBar, requests[url][selectedSizeIndex]);
+      const result = await browser.runtime.sendMessage({ action: 'downloadMPDOffline', url, fileName, headers, downloadMethod, request: requests[url][selectedSizeIndex], skipCache: skipCache });
+      if (result && result.error) {
+        throw new Error(result.error);
+      }
+      return;
+    }
+
+
+    //At this point the media is not a stream or should not be treated as such, so initiate a regular download
+    const result = await browser.runtime.sendMessage({ action: 'downloadRawMedia', url, fileName, headers, downloadMethod, request: requests[url][selectedSizeIndex], skipCache: skipCache });
+    if (result && result.error) {
+      throw new Error(result.error);
+    }
+  } catch (error) {
+    if (progressListener) {
+      browser.runtime.onMessage.removeListener(progressListener);
+      progressListener = null;
+    }
+    if (progressContainer && progressContainer.parentElement === mediaDiv) {
+      mediaDiv.removeChild(progressContainer);
+    }
+    mediaDiv.querySelector("#download-button").loading = false;
+    mediaDiv.querySelector("#download-button").disabled = false;
+
+    if (isDownloadCancelledError(error)) {
+      return;
+    }
+
+    if (!navigator.onLine) {
+      mdui.snackbar({
+        message: browser.i18n.getMessage("offlineError"),
+        autoCloseDelay: 15000,
+        closeable: true,
+      });
+    }
+    console.error('Error downloading media file:', error);
+    showDialog(browser.i18n.getMessage("downloadError", [error.message]), null, { error: `Error downloading media file: ${error.message}`, url: url });
+  }
+  finally {
+    if (wakeLock) {
+      wakeLock.release().then(() => {
+        wakeLock = null;
+      });
+    }
+  }
+}
+
+// Handle messages from the background script
+
+browser.runtime.onMessage.addListener(handleMessage);
+
+function handleMessage(message, sender, sendResponse) {
+  console.log('Received message in popup:', message);
+  switch (message.action) {
+    case 'promptStreamVariant':
+      return promptStreamVariant(message.variants || [], message.url, message.requestId, message.audioTracks || [], message.trackType || 'video')
+        .then(selectedTracks => ({ selectedTracks }));
+        break;
+    case 'showSplitDownloadDialog':
+      {
+      const videoFiles = message.videoFiles || [`${message.baseName}_video.mp4`];
+      const audioFiles = message.audioFiles || [`${message.baseName}_audio.mp4`];
+      const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+      const inputs = [...videoFiles, ...audioFiles].map(file => `-i "${escapeHtml(file)}"`).join(' ');
+      const videoMaps = videoFiles.map((file, index) => `-map ${index}:v?`).join(' ');
+      const audioMaps = audioFiles.map((file, index) => `-map ${videoFiles.length + index}:a?`).join(' ');
+      void showPreferenceAwareCompletionNotice({
+        preferenceKey: "split-download-complete-dont-remind-me",
+        headline: browser.i18n.getMessage("splitAudioVideoDownloadCompleteTitle"),
+        description: `The selected audio and video tracks were downloaded separately. Merge them with ffmpeg:<br><code>ffmpeg ${inputs} ${videoMaps} ${audioMaps} -c copy "${escapeHtml(message.baseName)}.mp4"</code>`,
+      }).catch((error) => console.error('Error showing split download completion notice:', error));
+      return Promise.resolve();
+      }
+      break;
+    case 'promptMPDVideoRepresentation':
+      return promptMPDVideoRepresentation(message.reps, "video", message.requestId)
+        .then(selectedRepresentations => ({ selectedRepresentations }));
+        break;
+    case 'promptMPDAudioRepresentation':
+      return promptMPDVideoRepresentation(message.reps, "audio", message.requestId)
+        .then(selectedRepresentations => ({ selectedRepresentations }));
+        break;
+    case 'showMPDDownloadCompleteDialog':
+      void showPreferenceAwareCompletionNotice({
+        preferenceKey: "mpd-download-complete-dont-remind-me",
+        headline: browser.i18n.getMessage("mpdDownloadCompleteTitle"),
+        description: browser.i18n.getMessage("mpdDownloadCompleteMessage", [message.baseName, ".mp4"]),
+      }).catch((error) => console.error('Error showing MPD completion notice:', error));
+      return Promise.resolve();
+      break;
+    case 'promptDRMWarning':
+      return promptDRMWarning(message.requestId);
+    case 'showAudioStreamSnackbar':
+      mdui.snackbar({
+        message: browser.i18n.getMessage("splitDownloadWarningSnackbar"),
+        autoCloseDelay: 10000,
+        closeable: true,
+      });
+      return Promise.resolve();
+    case 'triggerQueuedAndroidDownloads':
+      triggerQueuedAndroidDownloadsIfAny().catch((error) => console.error('Error triggering queued Android downloads:', error));
+    default:
+      console.warn(`Unknown message action: ${message.action}`);
+      return undefined;
+  }
+}
+
+
+async function promptStreamVariant(variants, url, requestId, audioTracks = [], trackType = 'video') {
+  return new Promise((resolve) => {
+    // Mark this popup as pending
+    pendingPopupState = {
+      type: trackType === 'audio' ? 'streamAudioTracks' : 'streamVideoTracks',
+      variants,
+      audioTracks,
+      url,
+      requestId
+    };
+
+    const humanizeLanguage = (languageTag) => {
+      if (!languageTag || typeof languageTag !== 'string') return null;
+      const normalized = languageTag.trim();
+      if (!normalized) return null;
+      const primaryTag = normalized.split(/[-_]/)[0];
+      try {
+        const displayNames = new Intl.DisplayNames([browser.i18n.getUILanguage()], { type: 'language' });
+        return displayNames.of(primaryTag) || normalized;
+      } catch (error) {
+        return normalized;
+      }
+    };
+
+    const variantOptions = variants.map(variant => {
+      const labelParts = [];
+
+      if (variant.resolution && variant.resolution !== 'unknown') {
+        labelParts.push(variant.resolution);
+      }
+      if (variant.name) {
+        labelParts.push(variant.name);
+      }
+      if (variant.audioName) {
+        labelParts.push(variant.audioName);
+      }
+
+      const languageLabel = humanizeLanguage(variant.language || variant.audioLanguage);
+      if (languageLabel) {
+        labelParts.push(languageLabel);
+      }
+
+      const baseLabel = labelParts.join(' - ') || variant.codecs || variant.uri || variant.url || 'Stream';
+      const bitrateLabel = variant.bandwidth ? `${Math.round(variant.bandwidth / 1000)} kbps` : null;
+      const label = bitrateLabel ? `${baseLabel} (${bitrateLabel})` : baseLabel;
+
+      return {
+        ...variant,
+        label,
+        value: variant.uri || variant.url,
+        uri: variant.uri || variant.url,
+        type: 'video'
+      };
+    });
+
+    const audioOptions = audioTracks.map((track, index) => ({
+      ...track,
+      label: `${track.name || `Audio track ${index + 1}`} (${track.language || `${Math.round((track.bandwidth || 0) / 1000)} kbps`})`,
+      value: track.uri,
+      uri: track.uri,
+      type: 'audio'
+    }));
+
+    const options = trackType === 'audio' ? audioOptions : variantOptions;
+
+    // Build a dialog for one track type at a time.
+    const dialog = document.createElement("mdui-dialog");
+    dialog.headline = browser.i18n.getMessage("streamQualityDialogTitle")
+
+    const form = document.createElement("form");
+    const checkboxes = [];
+    options.forEach((option, index) => {
+      const checkbox = document.createElement("mdui-checkbox");
+      checkbox.value = index;
+      checkbox.innerText = `${trackType === 'audio' ? 'Audio' : 'Video'}: ${option.label}`;
+      checkboxes.push(checkbox);
+      form.appendChild(checkbox);
+      form.appendChild(document.createElement("br"));
+    });
+
+    dialog.appendChild(form);
+
+    const actions = document.createElement("div");
+    actions.className = "mdui-dialog-actions";
+    dialog.appendChild(actions);
+
+    const cancelBtn = document.createElement("mdui-button");
+    cancelBtn.textContent = browser.i18n.getMessage("cancelButton")
+    cancelBtn.setAttribute("variant", "text");
+    cancelBtn.addEventListener("click", () => {
+      pendingPopupState = null;
+      resolve(null);
+      dialog.open = false;
+      browser.runtime.sendMessage({ action: 'popupResolved', requestId, result: { selectedTracks: null } }).catch(() => {});
+    });
+    actions.appendChild(cancelBtn);
+
+    const confirmBtn = document.createElement("mdui-button");
+    confirmBtn.textContent = browser.i18n.getMessage("okButton")
+    confirmBtn.setAttribute("variant", "text");
+    confirmBtn.addEventListener("click", () => {
+      pendingPopupState = null;
+      dialog.open = false;
+      const selectedTracks = checkboxes.filter(checkbox => checkbox.checked).map(checkbox => {
+        const optionIndex = Number(checkbox.value);
+        return options[optionIndex];
+      });
+      resolve(selectedTracks);
+      browser.runtime.sendMessage({ action: 'popupResolved', requestId, result: { selectedTracks } }).catch(() => {});
+
+    });
+    actions.appendChild(confirmBtn);
+
+
+    document.body.appendChild(dialog);
+    requestAnimationFrame(() => dialog.open = true);
+  });
+}
+
+async function promptMPDVideoRepresentation(reps, type, requestId) {
+  return new Promise((resolve) => {
+    // Mark this popup as pending
+    const popupType = type === 'audio' ? 'mpdAudioRepresentation' : 'mpdVideoRepresentation';
+    pendingPopupState = {
+      type: popupType,
+      reps,
+      requestId
+    };
+
+    console.log('Prompting user to select MPD representation:', reps);
+    const dialog = document.createElement("mdui-dialog");
+    if(type === 'audio') {
+      dialog.headline = browser.i18n.getMessage("audioQualityDialogTitle");
+    } else {
+      dialog.headline = browser.i18n.getMessage("videoQualityDialogTitle");
+    }
+
+    const form = document.createElement("form");
+    const checkboxes = [];
+    const humanizeLanguage = (languageTag) => {
+      if (!languageTag || typeof languageTag !== 'string') return null;
+      const normalized = languageTag.trim();
+      if (!normalized) return null;
+      const primaryTag = normalized.split(/[-_]/)[0];
+      try {
+        const displayNames = new Intl.DisplayNames([browser.i18n.getUILanguage()], { type: 'language' });
+        return displayNames.of(primaryTag) || normalized;
+      } catch (error) {
+        return normalized;
+      }
+    };
+
+    reps.forEach((rep, index) => {
+      const checkbox = document.createElement("mdui-checkbox");
+      checkbox.value = index;
+
+      const trackPrefix = type === 'audio' ? `Audio track ${index + 1}` : `Video track ${index + 1}`;
+      const labelParts = [trackPrefix];
+      if (rep.name) {
+        labelParts.push(rep.name);
+      }
+
+      const languageLabel = humanizeLanguage(rep.language);
+      if (languageLabel) {
+        labelParts.push(languageLabel);
+      }
+
+      const details = [];
+      if (type !== 'audio' && rep.width && rep.height) {
+        details.push(`${rep.width}x${rep.height}`);
+      }
+      if (rep.bandwidth) {
+        details.push(`${Math.round(rep.bandwidth / 1000)} kbps`);
+      }
+
+      const detailsSuffix = details.length ? ` (${details.join(', ')})` : '';
+      checkbox.innerText = `${labelParts.join(' - ')}${detailsSuffix}`;
+
+      checkboxes.push(checkbox);
+      form.appendChild(checkbox);
+      form.appendChild(document.createElement("br"));
+    });
+
+    dialog.appendChild(form);
+
+    const actions = document.createElement("div");
+    actions.className = "mdui-dialog-actions";
+    dialog.appendChild(actions);
+
+    const cancelBtn = document.createElement("mdui-button");
+    cancelBtn.textContent = browser.i18n.getMessage("cancelButton")
+    cancelBtn.setAttribute("variant", "text");
+    cancelBtn.addEventListener("click", () => {
+      pendingPopupState = null;
+      resolve(null);
+      dialog.open = false;
+      browser.runtime.sendMessage({ action: 'popupResolved', requestId, result: { selectedRepresentations: null } }).catch(() => {});
+    });
+    actions.appendChild(cancelBtn);
+
+    const confirmBtn = document.createElement("mdui-button");
+    confirmBtn.textContent = browser.i18n.getMessage("okButton")
+    confirmBtn.setAttribute("variant", "text");
+    confirmBtn.addEventListener("click", () => {
+      pendingPopupState = null;
+      dialog.open = false;
+      const selectedRepresentations = checkboxes.filter(checkbox => checkbox.checked).map(checkbox => reps[Number(checkbox.value)]);
+      resolve(selectedRepresentations);
+      browser.runtime.sendMessage({ action: 'popupResolved', requestId, result: { selectedRepresentations } }).catch(() => {});
+
+    });
+    actions.appendChild(confirmBtn);
+
+    document.body.appendChild(dialog);
+    requestAnimationFrame(() => dialog.open = true);
+  });
+}
+
+async function promptDRMWarning(requestId) {
+  const preferenceValue = await getDialogPreference(dialogPreferenceKeys.drmWarning);
+
+  if (preferenceValue === '2') {
+    browser.runtime.sendMessage({ action: 'popupResolved', requestId, result: { continue: true } }).catch(() => {});
+    return { continue: true };
+  }
+
+  if (preferenceValue === '1') {
+    await showDontRemindMeSnackbar(browser.i18n.getMessage("drmWarningTitle"), dialogPreferenceKeys.drmWarning);
+    browser.runtime.sendMessage({ action: 'popupResolved', requestId, result: { continue: true } }).catch(() => {});
+    return { continue: true };
+  }
+
+  return new Promise((resolve) => {
+    // Mark this popup as pending
+    pendingPopupState = {
+      type: 'drmWarning',
+      requestId
+    };
+
+    showDialogCustom({
+      headline: browser.i18n.getMessage("drmWarningTitle"),
+      description: browser.i18n.getMessage("drmWarningDescription"),
+      confirmText: browser.i18n.getMessage("drmWarningConntinueButton"),
+      cancelText: browser.i18n.getMessage("cancelButton"),
+      showTextField: false,
+      showCheckbox: true,
+      checkboxLabel: browser.i18n.getMessage("dontRemindMeCheckbox"),
+      onCancel: async () => {
+        pendingPopupState = null;
+        resolve({ continue: false });
+        browser.runtime.sendMessage({ action: 'popupResolved', requestId, result: { continue: false } }).catch(() => {});
+      },
+      onConfirm: async (checked) => {
+        if (checked) {
+          await setDialogPreference("drm-warning-dont-remind-me", '1');
+        }
+        pendingPopupState = null;
+        resolve({ continue: true });
+        browser.runtime.sendMessage({ action: 'popupResolved', requestId, result: { continue: true } }).catch(() => {});
+      },
+    });
+  });
+}

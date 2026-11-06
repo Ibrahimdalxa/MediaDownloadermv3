@@ -1,0 +1,763 @@
+{
+    "actionTitle": {
+        "message": "Download media",
+        "description": "The contents of the context menu when hovering over the extension icon."
+    },
+    "extensionDescription": {
+        "message": "Download videos, music, streams and subtitles to your device!",
+        "description": "The description of the extension shown in the browser's settings page."
+    },
+    "errorTitle1": {
+        "message": "Something went wrong!",
+        "description": "The 1st title of the error popup, randomly selects one of the titles when there is an error."
+    },
+    "errorTitle2": {
+        "message": "Oops!",
+        "description": "The 2nd title of the error popup."
+    },
+    "errorTitle3": {
+        "message": "Uh oh!",
+        "description": "The 3rd title of the error popup."
+    },
+    "errorTitle4": {
+        "message": "Error!",
+        "description": "The 4th title of the error popup."
+    },
+    "errorTitle5": {
+        "message": "Annnd it broke!",
+        "description": "The 5th title of the error popup."
+    },
+    "errorTitle6": {
+        "message": "Oh no!",
+        "description": "The 6th title of the error popup."
+    },
+    "offlineError": {
+        "message": "The download likely failed because you are offline. Please check your internet connection and try again.",
+        "description": "The error message shown when the user tries to download media while offline."
+    },
+    "reportIssue": {
+        "message": "Report issue",
+        "description": "The text of the link to report an issue in the error popup."
+    },
+    "okButton": {
+        "message": "OK",
+        "description": "The text of the OK button in the error popup."
+    },
+    "requestText": {
+        "message": "$METHOD$ request from $SOURCE$ at $TIME$",
+        "description": "The text showing which type of request is being made to load the media.",
+        "placeholders": {
+            "METHOD": {
+                "content": "$1",
+                "example": "GET"
+            },
+            "SOURCE": {
+                "content": "$2",
+                "example": "https://example.com/video.mp4"
+            },
+            "TIME": {
+                "content": "$3",
+                "example": "12:34"
+            }
+        }
+    },
+    "requestMethodUnknown": {
+        "message": "Unknown",
+        "description": "The text shown when the request method is not recognized."
+    },
+    "requestSourceUnknown": {
+        "message": "an unknown source",
+        "description": "The text shown when the request source is not recognized."
+    },
+    "sizeText": {
+        "message": "Size",
+        "description": "The text above the size selector in the media list."
+    },
+    "copyURL": {
+        "message": "Copy URL",
+        "description": "The text of the button to copy the media URL to clipboard."
+    },
+    "URLCopyError": {
+        "message": "Failed to copy URL to clipboard",
+        "description": "The error message shown when the URL copy operation fails."
+    },
+    "previewMedia": {
+        "message": "Preview",
+        "description": "The text of the preview button in the media list."
+    },
+    "downloadMedia": {
+        "message": "Download",
+        "description": "The text of the download button in the media list."
+    },
+    "endOfMediaList": {
+        "message": "That's all we could find! If you don't see the media you're looking for, try starting the media then refreshing the list. If you still don't see it, change media detection method in the settings. For more help, click the '?' button at the bottom left.",
+        "description": "The text shown at the end of the media list in the popup."
+    },
+    "endOfMediaListLink":{
+        "message": "Can't find your media? Submit it here!",
+        "description": "The text of the link shown at the end of the media list in the popup, which leads to a form to submit undetected media."
+    },
+    "endOfMediaListAndroid": {
+        "message": "On Android, you need to open the add-on page BEFORE loading your media. If you have already loaded your media, refresh the media page, start playing it again then come back to this tab and click \"Refresh list\".",
+        "description": "The text shown at the end of the media list in the popup, only when the browser is an Android device."
+    },
+    "listLoadError": {
+        "message": "Error retrieving media requests. Here's what went wrong: $ERROR$",
+        "description": "The error message shown when the media list fails to load.",
+        "placeholders": {
+            "ERROR": {
+                "content": "$1",
+                "example": "Network error"
+            }
+        }
+    },
+    "listClearError": {
+        "message": "Error clearing media list. Here's what went wrong: $ERROR$",
+        "description": "The error message shown when the media list fails to clear.",
+        "placeholders": {
+            "ERROR": {
+                "content": "$1",
+                "example": "Network error"
+            }
+        }
+    },
+    "unknownSize": {
+        "message": "Unknown size",
+        "description": "The text shown when the size of the media can't be parsed."
+    },
+    "downloadError": {
+        "message": "Error downloading media. Here's what went wrong: $ERROR$",
+        "description": "The error message shown when the media download fails.",
+        "placeholders": {
+            "ERROR": {
+                "content": "$1",
+                "example": "Network error"
+            }
+        }
+    },
+    "homeTab": {
+        "message": "Home",
+        "description": "The name of the home tab in the popup."
+    },
+    "settingsTab": {
+        "message": "Settings",
+        "description": "The name of the settings tab in the popup."
+    },
+    "clearListButton": {
+        "message": "Clear list",
+        "description": "The label of the button to clear the media list."
+    },
+    "refreshListButton": {
+        "message": "Refresh list",
+        "description": "The label of the button to refresh the media list."
+    },
+    "settingsDetectionSectionTitle": {
+        "message": "Detection settings",
+        "description": "The title of the detection settings section in the settings tab."
+    },
+    "settingsDetectionSectionDescription": {
+        "message": "Configure how the add-on detects media files and stream segment hiding.",
+        "description": "The description of the detection settings section in the settings tab."
+    },
+    "settingsDownloadSectionTitle": {
+        "message": "Download settings",
+        "description": "The title of the download settings section in the settings tab."
+    },
+    "settingsDownloadSectionDescription": {
+        "message": "File naming, and preferences for downloading streams and media.",
+        "description": "The description of the download settings section in the settings tab."
+    },
+    "settingsInterfaceSectionTitle": {
+        "message": "Interface settings",
+        "description": "The title of the interface settings section in the settings tab."
+    },
+    "settingsInterfaceSectionDescription": {
+        "message": "Change the color theme and how the add-on opens.",
+        "description": "The description of the interface settings section in the settings tab."
+    },
+    "detectionMethodTitle": {
+        "message": "Detection method",
+        "description": "The title of the detection method section in the settings tab."
+    },
+    "needToRefreshListWarning": {
+        "message": "⚠️ After changing this, click on \"Refresh list\" to see the changes!",
+        "description": "The warning shown below the detection method title in the settings tab."
+    },
+    "detectionDisabledExplain": {
+        "message": "Unchecking both options will not filter anything, showing all requests (even non-media requests!) of the browser.",
+        "description": "The explanation on how disabling detection works, shown in the settings tab"
+    },
+    "urlDetectionExplain": {
+        "message": "Detection by checking if the URL contains a known media type (for example .mp4, .m3u8). It's fast, but some sites don't serve medias through these kind of URLs, so it might not detect everything.",
+        "description": "The explanation of URL-based detection method"
+    },
+    "urlDetectionCheckbox": {
+        "message": "Detection via URL",
+        "description": "The label of the checkbox to enable URL-based detection method."
+    },
+    "mimeDetectionExplain": {
+        "message": "Detection by checking the server's MIME response (for example video/mp4, application/vnd.apple.mpegurl). It's slower than URL detection as the add-on needs to monitor every request and response, but more reliable.",
+        "description": "The explanation of MIME-based detection method"
+    },
+    "mimeDetectionCheckbox": {
+        "message": "Detection via server's MIME response",
+        "description": "The label of the checkbox to enable MIME-based detection method."
+    },
+    "downloadMethodTitle": {
+        "message": "Download method",
+        "description": "The title of the download method section in the settings tab."
+    },
+    "browserDownloadExplain": {
+        "message": "Download the media using the browser's native download manager. Fast and handles disconnects, but only works on some sites and on some browsers (Firefox for PC).",
+        "description": "The explanation of native browser download method"
+    },
+    "browserDownloadCheckbox": {
+        "message": "Native browser download",
+        "description": "The label of the checkbox to enable native browser download method."
+    },
+    "fetchDownloadExplain": {
+        "message": "Download the media using the Fetch API. Works on most sites and browsers, but can be slower and doesn't handle disconnects well.",
+        "description": "The explanation of Fetch API download method"
+    },
+    "fetchDownloadCheckbox": {
+        "message": "Fetch API",
+        "description": "The label of the checkbox to enable Fetch API download method."
+    },
+    "mediaCacheTitle": {
+        "message": "Media cache",
+        "description": "The title of the media cache section in the settings tab."
+    },
+    "mediaCacheExplain": {
+        "message": "Attempt to store the media response, so the download can occur without making a request to the server. Downloads will be faster but can slow down your browser. Disable this if you have low storage space available.",
+        "description": "The explanation of the media cache option"
+    },
+    "mediaCacheExplainPrivate": {
+        "message": "❗️ This feature saves data about the media on the pages you visited, and is disabled in private browsing mode by default. If you want to enable it in private browsing, turn this switch on. (Any data collected is reset when clicking on the \"Clear list\" button, or when you restart the browser)"
+    },
+    "mediaCacheCheckbox": {
+        "message": "Enable media cache",
+        "description": "The label of the checkbox to enable media cache."
+    },
+    "renameDownloadsTitle": {
+        "message": "Filename options",
+        "description": "The title of the renaming downloaded files section in the settings tab."
+    },
+    "renameDownloadsExplain": {
+        "message": "By default, downloaded files are named after the name of the tab that requests the media.. Enabling this option will allow you to specify a custom name for each downloaded file.",
+        "description": "The explanation of the renaming downloaded files option"
+    },
+    "renameDownloadsTabNameCheckbox": {
+        "message": "Use the tab name",
+        "description": "The label of the checkbox to enable naming downloaded files according to the tab name."
+    },
+    "renameDownloadsTabNameExplain": {
+        "message": "Use the name of the tab to rename the downloaded file. This is usually the best option, but some sites don't set a proper name.",
+        "description": "The explanation of the rename downloads tab name option"
+    },
+    "renameDownloadsUrlCheckbox": {
+        "message": "Use the last part of URL",
+        "description": "The label of the checkbox to enable naming downloaded files according to the last part of the URL."
+    },
+    "renameDownloadsUrlExplain": {
+        "message": "Use the URL of the media to rename the downloaded file. For example, https://example.com/video.mp4 would be renamed to video.mp4. This is usually not very descriptive, but it works on all sites.",
+        "description": "The explanation of the rename downloads URL option"
+    },
+    "renameDownloadsManualNameCheckbox": {
+        "message": "Enter filename manually",
+        "description": "The label of the checkbox to enable renaming downloaded files."
+    },
+    "renameDownloadsManualNameExplain": {
+        "message": "A popup will appear when downloading a file, allowing you to specify a custom name for each downloaded file.",
+        "description": "The explanation of the renaming downloaded files option"
+    },
+    "hideSegmentsTitle": {
+        "message": "Hide stream segments",
+        "description": "The title of the hide stream segments section in the settings tab."
+    },
+    "hideSegmentsExplain": {
+        "message": "Live streams use multiple segments to deliver content in small parts. Usually you only need the stream manifest, so the segments can be hidden to reduce clutter.",
+        "description": "The explanation of the hide stream segments option"
+    },
+    "hideSegmentsCheckbox": {
+        "message": "Hide stream segments in the media list",
+        "description": "The label of the checkbox to enable hiding stream segments in the media list."
+    },
+    "streamDownloadTitle": {
+        "message": "Stream download preference",
+        "description": "The title of the stream download preference section in the settings tab."
+    },
+    "streamFileDownloadExplain": {
+        "message": "Download the stream manifest file (.m3u8, .mpd) directly. You will need a media player that supports these formats (like VLC) to view them. Lighter downloads, but you will need to be online with a working server to play the file. Some servers also block playback this way.",
+        "description": "The explanation of stream manifest download method"
+    },
+    "streamFileDownloadCheckbox": {
+        "message": "Download stream manifest",
+        "description": "The label of the checkbox to enable stream manifest download method."
+    },
+    "offlineDownloadExplain": {
+        "message": "Convert the stream into a single offline video file (.ts or .zip) after downloading. This takes more time and storage, but the resulting file can be watched offline.",
+        "description": "The explanation of offline video file download method"
+    },
+    "offlineDownloadChecbox": {
+        "message": "Convert to offline video file",
+        "description": "The label of the checkbox to enable offline video file download method."
+    },
+    "streamQualityTitle": {
+        "message": "Stream quality preference",
+        "description": "The title of the stream quality preference section in the settings tab."
+    },
+    "askStreamQualityExplain": {
+        "message": "Always ask which quality to download when downloading a stream.",
+        "description": "The explanation of 'Always ask' stream quality preference"
+    },
+    "askStreamQualityCheckbox": {
+        "message": "Always ask me",
+        "description": "The label of the radio button to enable 'Always ask' stream quality preference."
+    },
+    "highestStreamQualityExplain": {
+        "message": "Always download the highest available quality for a stream. Better quality but larger files and slower downloads.",
+        "description": "The explanation of 'Always highest' stream quality preference"
+    },
+    "highestStreamQualityCheckbox": {
+        "message": "Always highest quality",
+        "description": "The label of the radio button to enable 'Always highest' stream quality preference."
+    },
+    "lowestStreamQualityExplain": {
+        "message": "Always download the lowest available quality for a stream. Lower quality but smaller files and faster downloads.",
+        "description": "The explanation of 'Always lowest' stream quality preference"
+    },
+    "lowestStreamQualityCheckbox": {
+        "message": "Always lowest quality",
+        "description": "The label of the radio button to enable 'Always lowest' stream quality preference."
+    },
+    "mpdFixExplain": {
+        "message": "This will modify the .mpd file you download to only include the quality you download. Otherwise, players like VLC will not play the file because it will try to request a quality you don't have downloaded.",
+        "description": "The explanation of the MPD fix option"
+    },
+    "mpdFixCheckbox": {
+        "message": "Fix MPD files (recommended)",
+        "description": "The label of the checkbox to enable the MPD fix option."
+    },
+    "openPreference": {
+        "message": "Add-on opening preference",
+        "description": "The title of the add-on opening preference section in the settings tab."
+    },
+    "openPreferenceExplain": {
+        "message": "Choose how the add-on opens when you click on the icon.",
+        "description": "The explanation of the add-on opening preference."
+    },
+    "floatingWindowCheckbox": {
+        "message": "Open in floating window",
+        "description": "The label of the radio button to open the add-on in a floating window."
+    },
+    "newTabCheckbox": {
+        "message": "Open in new tab",
+        "description": "The label of the radio button to open the add-on in a new tab."
+    },
+    "newWindowCheckbox": {
+        "message": "Open in new window",
+        "description": "The label of the radio button to open the add-on in a new window."
+    },
+      "deviceTypeTitle": {
+    "message": "Device type override",
+    "description": "Device type override title."
+  },
+  "deviceTypeExplain": {
+    "message": "On Android and the Tor browser, starting downloads from the background is not supported by the browser. If downloads complete without an error and without saving a file, try forcing a different device type.",
+    "description": "Device type forcing explanation."
+  },
+  "deviceTypeDefaultTitle": {
+    "message": "Automatic (recommended)",
+    "description": "The default device type option."
+  },
+  "deviceTypeDefaultExplain": {
+    "message": "Attempt to detect your device type automatically, from your user agent.",
+    "description": "The explanation for the default device type option."
+  },
+  "deviceTypeDesktopTitle": {
+    "message": "Force desktop",
+    "description": "The desktop device type option."
+  },
+  "deviceTypeDesktopExplain": {
+    "message": "Always treat your browser as a desktop device. This will enable downloads in the background, but will not start any downloads on Android devices or the Tor browser.",
+    "description": "The explanation for the desktop device type option."
+  },
+  "deviceTypeAndroidTitle": {
+    "message": "Force Android / Tor browser",
+    "description": "The Android device type option."
+  },
+  "deviceTypeAndroidExplain": {
+    "message": "Always treat your browser as an Android device. Enable this if the download appears to be completed but no file is saved. Downloads will progress in the background, but you will need to open the extension to finalize the download.",
+    "description": "The explanation for the Android device type option."
+  },
+    "colorPickerTitle": {
+        "message": "Interface color",
+        "description": "The title of the interface color section in the settings tab."
+    },
+    "creditsTitle": {
+        "message": "Credits",
+        "description": "The title of the credits section in the settings tab."
+    },
+    "creditsDescription1": {
+        "message": "Media Downloader Unleashed!! is a ",
+        "description": "The first part of the credits description."
+    },
+    "creditsDescription2": {
+        "message": "free and open-source project",
+        "description": "The second part of the credits description."
+    },
+    "creditsDescription3": {
+        "message": " made by ",
+        "description": "The third part of the credits description."
+    },
+    "creditsDescription4": {
+        "message": "🦊 helloyanis",
+        "description": "The fourth part of the credits description."
+    },
+    "creditsDescription5": {
+        "message": ".",
+        "description": "The fifth part of the credits description."
+    },
+    "rateButton": {
+        "message": "Rate",
+        "description": "The label of the button to rate the extension."
+    },
+    "shareButton": {
+        "message": "Share",
+        "description": "The label of the button to share the extension."
+    },
+    "donateButton": {
+        "message": "Donate",
+        "description": "The label of the button to donate to the developer."
+    },
+    "contactTitle": {
+        "message": "Contact me",
+        "description": "The title of the contact section in the settings tab."
+    },
+    "contactDescription": {
+        "message": "If you have any questions, suggestions or issues, feel free to contact me!",
+        "description": "The description of the contact section in the settings tab."
+    },
+    "emailButton": {
+        "message": "E-mail",
+        "description": "The label of the button to contact the developer via e-mail."
+    },
+    "mastodonButton": {
+        "message": "Mastodon",
+        "description": "The label of the button to contact the developer via Mastodon."
+    },
+    "mobileIncompatibleWarning": {
+        "message": "⚠️ This option is not compatible for some browsers, like Firefox for Android. If you are using this browser, then change the option back.",
+        "description": "The warning shown when the user enables an option that is not compatible with mobile browsers."
+    },
+    "permissionRequestTitle": {
+        "message": "Permission Required",
+        "description": "The headline of the permission request popup."
+    },
+    "permissionRequestDescription": {
+        "message": "The extension needs permission to access all URLs to function properly. This is in order to detect media from all websites. Your browsing data is only stored on your device, and not shared with anyone. Please grant the permission, or if you know what you are doing and want scoped storage, you can dismiss this warning.",
+        "description": "The description of the permission request popup."
+    },
+    "grantPermissionButton": {
+        "message": "Grant Permission",
+        "description": "The label of the button to grant the requested permission."
+    },
+    "denyPermissionButton": {
+        "message": "Don't remind me",
+        "description": "The label of the button to deny the requested permission."
+    },
+    "permissionGrantedMessage": {
+        "message": "Permission granted successfully.",
+        "description": "The message shown when the permission is granted successfully."
+    },
+    "permissionDeniedMessage": {
+        "message": "Permission denied. The extension may not work as expected.",
+        "description": "The message shown when the permission is denied."
+    },
+    "permissionGrantFailedMessage": {
+        "message": "Failed to grant permission. The extension may not work as expected.",
+        "description": "The message shown when the permission grant operation fails."
+    },
+    "mpdDownloadCompleteTitle": {
+        "message": "MPD Download Complete",
+        "description": "The title of the notification shown when an MPD download is complete."
+    },
+    "mpdDownloadCompleteMessage": {
+        "message": "The MPD stream has been downloaded as a ZIP file. You can extract it and play the $BASENAME$.mpd video with VLC or any other compatible player.",
+        "description": "The message of the notification shown when an MPD download is complete.",
+        "placeholders": {
+            "BASENAME": {
+                "content": "$1",
+                "example": "video"
+            }
+        }
+    },
+    "splitDownloadWarningSnackbar": {
+        "message": "The audio and video streams are separated. Two files will be downloaded.",
+        "description": "The snackbar text that appears when an m3u8 stream with split audio and video starts to download"
+    },
+    "downloadingAudioSnackbar": {
+        "message": "Downloading audio stream...",
+        "description": "The snackbar text that appears when an m3u8 stream with split audio and video has the video portion downloaded and switches to downloading audio"
+    },
+    "splitAudioVideoDownloadCompleteTitle": {
+        "message": "Downloaded separated audio and video streams",
+        "description": "The title of the dialog shown when an m3u8 stream with split audio and video is downloaded."
+    },
+    "splitAudioVideoDownloadCompleteDescription": {
+        "message": "Both video and audio streams have been downloaded. You can merge them both with <a href='https://ffmpeg.org/'>ffmpeg</a> using the following command :<br/><code>ffmpeg -i \"$BASENAME$_video$VIDEOEXT$\" -i \"$BASENAME$_audio$VIDEOEXT$\" -c copy \"$BASENAME$.mp4\"</code>",
+        "description": "The message of the dialog shown when an m3u8 stream with split audio and video is downloaded.",
+        "placeholders": {
+          "BASENAME": {
+              "content": "$1",
+              "example": "my_stream"
+          },
+          "VIDEOEXT": {
+            "content": "$2",
+            "example": ".mp4"
+          }
+      }
+    },
+    "videoQualityDialogTitle": {
+        "message": "Select video quality",
+        "description": "The title of the dialog to select video quality when downloading a stream for MPD streams."
+    },
+    "videoQualitySelectLabel": {
+        "message": "Video quality",
+        "description": "The label of the quality selection dropdown in the video quality dialog for MPD streams."
+    },
+    "audioQualityDialogTitle": {
+        "message": "Select audio quality",
+        "description": "The title of the dialog to select audio quality when downloading an stream for MPD streams."
+    },
+    "audioQualitySelectLabel": {
+        "message": "Audio quality",
+        "description": "The label of the quality selection dropdown in the audio quality dialog for MPD streams."
+    },
+    "streamQualityDialogTitle": {
+        "message": "Select stream quality",
+        "description": "The title of the dialog to select the stream quality when downloading an m3u8 stream."
+    },
+    "streamQualitySelectLabel": {
+        "message": "Stream quality",
+        "description": "The label of the quality selection dropdown in the stream quality dialog for m3u8 streams."
+    },
+    "mediaPreviewSnackbar": {
+        "message": "Media preview does not work with all sites and media types. If nothing loads, try to download instead.",
+        "description": "The snackbar shown when someone uses the preview mode for the first time."
+    },
+    "mediaPreviewDontRemindMe": {
+        "message": "Don't remind me",
+        "description": "The action in the snackbar from above which will make it no longer show up."
+    },
+    "helpTooltip": {
+        "message": "Open help",
+        "description": "The text of the tooltip shown when hovering over the button at the bottom left, to open the wiki page"
+    },
+    "diagnosticDataPermissionDenied": {
+        "message": "Permission to share diagnostic data was denied.",
+        "description": "The message shown when the user denies permission to share diagnostic data."
+    },
+    "diagnosticDataSent": {
+        "message": "Diagnostic data has been sent successfully. Thank you for helping improve the extension!",
+        "description": "The message shown when diagnostic data has been sent successfully."
+    },
+    "diagnosticDataSendError": {
+        "message": "An error occurred while sending diagnostic data. Please try again later.",
+        "description": "The message shown when there is an error sending diagnostic data."
+    },
+    "diagnosticDataEmailTitle": {
+        "message": "Do you want me to contact you back about this issue?",
+        "description": "The title of the prompt to enter an e-mail when sharing diagnostic data."
+    },
+    "diagnosticDataEmailDescription": {
+        "message": "If so, please enter your e-mail address below. It will not be saved or shared to third parties. It will only be used to contact you back. If you don't want to be contacted, leave the field empty.<br/>The data that will be sent in your error report is : <br/><ul><li>Your user agent (yours is the following : <code>$USERAGENT$</code>)</li><li>The URL of the page that triggered the error : <code>$REFERER$</code></li><li>The URL of the media : <code>$MEDIAURL$</code></li><li>The error that has occured : <code>$ERROR$</code></li></ul>",
+        "description": "The description of the prompt to enter an e-mail when sharing diagnostic data.",
+        "placeholders": {
+            "USERAGENT": {
+                "content": "$1",
+                "example": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            },
+            "REFERER": {
+                "content": "$2",
+                "example": "https://example.com/video_page"
+            },
+            "MEDIAURL": {
+                "content": "$3",
+                "example": "https://example.com/video.mp4"
+            },
+            "ERROR": {
+                "content": "$4",
+                "example": "Network error"
+            }
+        }
+    },
+    "diagnosticDataEmailLabel": {
+        "message": "E-mail address (optional)",
+        "description": "The label of the text field to enter an e-mail when sharing diagnostic data."
+    },
+    "diagnosticDataEmailPlaceholder": {
+        "message": "email@example.com",
+        "description": "The placeholder of the text field to enter an e-mail when sharing diagnostic data."
+    },
+    "diagnosticDataEmailOkButton": {
+        "message": "Submit",
+        "description": "The text of the OK button in the prompt to enter an e-mail when sharing diagnostic data."
+    },
+    "diagnosticDataEmailCancelButton": {
+        "message": "Cancel submission",
+        "description": "The text of the Cancel button in the prompt to enter an e-mail when sharing diagnostic data."
+    },
+    "noRequestFoundError": {
+        "message": "Cannot find the corresponding request's info in the request history. This can happen when the request was already made and cached in your browser before installing the add-on. Clear your browsing data from the website you try to download from, then restart the browser and try again.",
+        "description": "The error message shown when there is no request found for the selected size."
+    },
+    "drmWarningTitle": {
+        "message": "DRM Detected",
+        "description": "The title of the warning shown when a DRM-protected MPD is detected."
+    },
+    "drmWarningDescription": {
+        "message": "This file uses DRM (ContentProtection). It can be downloaded, but not played without decrypting the stream. Maybe you can get around this by setting your browser to deny DRM content (e.g. In Firefox: about:preferences#general → Digital Rights Management Content). But on some sites they won't load the media at all if DRM is disabled, so this has a low chance to work.",
+        "description": "The description of the warning shown when a DRM-protected MPD is detected."
+    },
+    "drmWarningConntinueButton": {
+        "message": "Continue",
+        "description": "The text of the OK button in the DRM warning dialog."
+    },
+    "dialogPreferencesTitle": {
+        "message": "Reset dialog preferences",
+        "description": "The title of the settings card for dialog reminder preferences."
+    },
+    "dialogPreferencesExplain": {
+      "message": "If you have previously chosen to not be reminded again for certain dialogs, you can reset those preferences here. This will make all reminder dialogs show up again as they did the first time you encountered them.",
+      "description": "The explanation of the settings card for dialog reminder preferences."
+    },
+    "resetDialogPreferencesButton": {
+        "message": "Reset dialog preferences",
+        "description": "The label of the button that resets all dialog reminder preferences."
+    },
+    "dialogPreferencesResetMessage": {
+        "message": "Dialog preferences reset.",
+        "description": "The snackbar message shown after resetting dialog preferences."
+    },
+    "dontRemindMeCheckbox": {
+        "message": "Do not remind me",
+        "description": "The label of the checkbox shown in reminder dialogs."
+    },
+    "dontRemindMeSnackbarAction": {
+        "message": "Don't remind me",
+        "description": "The snackbar action that suppresses a reminder dialog permanently."
+    },
+    "cancelButton": {
+        "message": "Cancel",
+        "description": "The text of the Cancel button in the DRM warning dialog and other dialogs."
+    },
+    "ratingBannerText": {
+        "message": "If you enjoy using this add-on, please take a moment to rate it. Thank you very much!",
+        "description": "The text shown in the rating banner."
+    },
+    "ratingBannerRateButton": {
+        "message": "Rate now",
+        "description": "The label of the button to rate the extension in the rating banner."
+    },
+    "ratingBannerDismissButton": {
+        "message": "Dismiss",
+        "description": "The label of the button to dismiss the rating banner." 
+    },
+    "ratingBannerDontShowAgainButton": {
+        "message": "Don't ask again",
+        "description": "The label of the button to not show the rating banner again."
+    },
+    "ratingBannerRemindMeLaterButton": {
+        "message": "Ask again in a week",
+        "description": "The label of the button to be reminded later in the rating banner."
+    },
+    "youtubeDialogAskTitle": {
+        "message": "Are you trying to download a YouTube video?",
+        "description": "The title of the dialog shown when a YouTube media request is detected."
+    },
+    "youtubeDialogAskMessage": {
+        "message": "Downloading from YouTube is not supported directly in this extension due to YouTube's proprietary streaming methods. However, I can guide you to tools that specialize in downloading YouTube videos. Would you like me to show you these options?<br/><mdui-checkbox id=\"youtube-dialog-dont-show-again\">Don't show this message again</mdui-checkbox>",
+        "description": "The message of the dialog shown when a YouTube media request is detected."
+    },
+    "youtubeDialogAskOkButton": {
+        "message": "Yes",
+        "description": "The text of the OK button in the YouTube media request dialog."
+    },
+    "youtubeDialogDownloaderTitle": {
+        "message": "Try with Invidious",
+        "description": "The title of the dialog shown when guiding the user to download YouTube videos"
+    },
+    "youtubeDialogDownloaderMessage": {
+        "message": "Search and play your video on an Invidious instance (a privacy-focused YouTube front-end) and try downloading it from there. Invidious often uses more standard streaming methods that are compatible with this extension. Click on OK to open Nadeko, an invidious instance.",
+        "description": "The message of the dialog shown when guiding the user to download YouTube videos"
+    },
+    "fileNamePromptTitle": {
+        "message": "Enter file name",
+        "description": "The title of the prompt to enter a file name for the downloaded media."
+    },
+    "fileNamePromptDescription": {
+        "message": "Please enter a name for the downloaded file. It will be saved with this name in your default download folder. You can disable this screen in the settings if you prefer to always use the default name.",
+        "description": "The description of the prompt to enter a file name for the downloaded media."
+    },
+    "fileNamePromptLabel": {
+        "message": "File name",
+        "description": "The label of the text field to enter a file name for the downloaded media."
+    },
+    "hiddenSegmentsInfo": {
+        "message": "⚠️ $SEGMENTCOUNT$ segment(s) are hidden because they are part of a stream.",
+        "description": "The info message shown when some segments are hidden in the media list.",
+        "placeholders": {
+            "SEGMENTCOUNT": {
+                "content": "$1",
+                "example": "5"
+            }
+        }
+    },
+    "hiddenSegmentsInfoShowButton": {
+        "message": "Show segments",
+        "description": "The label of the button to show hidden segments in the media list."
+    },
+    "androidDownloadPopupTitle": {
+        "message": "File is ready to download",
+        "description": "The title of the popup shown when a download is completed on Android."
+    },
+    "androidDownloadPopupDescription": {
+        "message": "$FILENAME$ is ready to download. Click on the button below to save it to your device.",
+        "description": "The description of the popup shown when a download is completed on Android.",
+        "placeholders": {
+            "FILENAME": {
+                "content": "$1",
+                "example": "video.mp4"
+            }
+        }
+    },
+    "androidDownloadPopupButton": {
+        "message": "Save",
+        "description": "The text of the button in the popup shown when a download is completed on Android."
+    },
+    "androidDownloadPopupCloseButton": {
+        "message": "Close",
+        "description": "The text of the close button in the popup shown when a download is completed on Android."
+    },
+    "androidIncognitoDownloadTitle": {
+        "message": "This download may fail",
+        "description": "The title of the popup shown when a download starts on Android in incognito mode."
+    },
+    "androidIncognitoDownloadMessage": {
+        "message": "Due to restrictions in Android's incognito mode, this download may not complete successfully. If no file is downloaded, try again by opening this add-on in a normal browsing window. (Can still detect videos from incognito tabs)",
+        "description": "The description of the popup shown when a download starts on Android in incognito mode."
+    },
+    "androidIncognitoDownloadOkButton": {
+        "message": "Continue anyways",
+        "description": "The text of the OK button in the popup shown when a download starts on Android in incognito mode."
+    },
+    "mediaFromThisTab": {
+        "message": "Media from this tab",
+        "description": "The label of the media list section showing media from the current tab."
+    },
+    "mediaFromOtherTabs": {
+        "message": "Media from other tabs",
+        "description": "The label of the media list section showing media from other tabs."
+    }  
+}

@@ -1,0 +1,182 @@
+* {
+    font-family: system-ui;
+}
+
+.bottom-right {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.bottom-right>* {
+    margin: 5px;
+}
+
+.bottom-left {
+    position: fixed;
+    bottom: 16px;
+    left: 16px;
+}
+
+mdui-bottom-app-bar {
+    height: unset;
+    min-height: 5rem;
+    background-color: rgb(var(--mdui-color-surface-container-high));
+}
+
+.media-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 10px 0;
+}
+
+.md-item[multiline] {
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+#settings-container {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: wrap;
+    justify-content: space-around;
+}
+
+#settings-container>* {
+    margin: 10px;
+    padding: 10px;
+    flex-grow: 1;
+}
+
+#end-of-media-list {
+    margin-bottom: 200px;
+}
+
+mdui-card {
+    margin: 10px;
+    border: 1px solid rgb(var(--mdui-color-outline));
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-size: 100%
+}
+
+#refresh-list,
+#clear-list {
+    width: unset !important;
+    /*This button seemed to bug with MDUI putting it at 0 width*/
+}
+
+mdui-select::part(menu) {
+  max-height: 300px;
+  overflow: auto;
+  width: 100%;
+}
+
+mdui-card {
+    overflow-x: scroll;
+}
+
+code{
+    background-color: var(--mdui-color-surface-container-low);
+    color: var(--mdui-color-on-surface);
+    font-family: monospace;
+}
+
+#rating-banner {
+    background-color: rgb(var(--mdui-color-surface-bright));
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 5px;
+}
+
+#rating-banner > * {
+    margin: 5px;
+}
+
+#star-icon {
+    min-width: 25px;
+}
+
+#rating-banner-buttons {
+    margin-left: auto;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+}
+
+.highlighted {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(var(--mdui-color-primary-container), 0.8);
+    }
+    90% {
+        box-shadow: 0 0 0 20px rgba(var(--mdui-color-primary-container), 0.5);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(var(--mdui-color-primary-container), 0);
+    }
+}
+
+.bottom-button {
+    margin-right: 5px;
+}
+
+.settings-section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.settings-switch-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    border-top: 1px solid rgb(var(--mdui-color-outline-variant));
+    padding: 5px 0;
+}
+
+.settings-switch-description {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-left: 10px;
+}
+
+.settings-description-text {
+    color: rgb(var(--mdui-color-on-surface-variant));
+    font-size: 0.9em;
+}
+
+.settings-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mdui-dialog-content {
+    max-height: 50vh;
+    overflow-y: scroll;
+    display: flex;
+    flex-direction: column;
+}
+
+.download-button {
+    background-color: rgb(var(--mdui-color-secondary-container));
+    color: rgb(var(--mdui-color-on-secondary-container));
+}
+
+.media-subtitle {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    flex-direction: column;
+}
